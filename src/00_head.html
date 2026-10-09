@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Pirate Jelly — Material Studies</title>
+<meta name="description" content="An interactive WebGPU jelly diorama: a translucent ocean block with a tropical island, Skull Rock and an anchored pirate ship. Everything procedural.">
+<style>
+:root{
+  --bg:#ece6dc; --ink:#1d1a16; --ink2:#5d554b; --ink3:#8b8276;
+  --glass:rgba(250,247,241,.62); --glass-b:rgba(29,26,22,.10);
+  --accent:#c2562b; --accent2:#2a8c86; --track:rgba(29,26,22,.14);
+  --pill:rgba(250,247,241,.75); --shadow:0 18px 50px -20px rgba(60,40,20,.35);
+  --serif:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,"Times New Roman",serif;
+  --sans:ui-sans-serif,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+}
+body.dark{
+  --bg:#0f1424; --ink:#efe7da; --ink2:#b9b0a3; --ink3:#857d72;
+  --glass:rgba(20,24,40,.58); --glass-b:rgba(239,231,218,.12);
+  --accent:#f0a050; --accent2:#5fd0c4; --track:rgba(239,231,218,.18);
+  --pill:rgba(20,24,40,.7); --shadow:0 18px 50px -20px rgba(0,0,0,.7);
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--ink);font-family:var(--sans);
+  -webkit-font-smoothing:antialiased;transition:background-color .8s,color .8s}
+canvas#gl{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;cursor:grab;outline:none}
+canvas#gl.grabbing{cursor:grabbing}
+canvas#gl.pointer{cursor:pointer}
+.ui{position:fixed;z-index:2;pointer-events:none}
+.ui *{pointer-events:auto}
+#masthead{left:28px;top:24px;max-width:340px;pointer-events:none}
+#masthead *{pointer-events:none}
+.eyebrow{font:600 10.5px/1 var(--mono);letter-spacing:.22em;text-transform:uppercase;color:var(--ink2);display:flex;gap:10px;align-items:center}
+.eyebrow i{display:inline-block;width:22px;height:1px;background:currentColor;opacity:.6}
+h1{font-family:var(--serif);font-style:italic;font-weight:400;font-size:64px;line-height:.9;letter-spacing:-.02em;margin:14px 0 14px}
+h1 span{display:block}
+h1 em{font-style:italic;color:var(--accent)}
+.lede{font-family:var(--serif);font-size:15px;line-height:1.45;color:var(--ink2);margin:0;max-width:300px}
+#status{display:inline-flex;align-items:center;gap:8px;margin-top:16px;padding:6px 11px 6px 9px;border-radius:99px;background:var(--pill);
+  border:1px solid var(--glass-b);font:600 10.5px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--ink2);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);pointer-events:none}
+#status b{width:7px;height:7px;border-radius:50%;background:#9a9186}
+#status.live b{background:#3bb273;box-shadow:0 0 0 3px rgba(59,178,115,.18);animation:pulse 2.4s infinite}
+#status.paused b{background:#e0a33a}
+#status.na b{background:#d0473a}
+@keyframes pulse{50%{box-shadow:0 0 0 6px rgba(59,178,115,0)}}
+
+#panel{right:20px;top:20px;width:272px;max-height:calc(100% - 40px);overflow:auto;padding:18px 18px 16px;border-radius:18px;
+  background:var(--glass);border:1px solid var(--glass-b);box-shadow:var(--shadow);
+  backdrop-filter:blur(18px) saturate(1.3);-webkit-backdrop-filter:blur(18px) saturate(1.3);transition:background .8s,border-color .8s}
+#panel::-webkit-scrollbar{width:0}
+.handle{display:none}
+.sec{padding:2px 0 14px;margin-bottom:12px;border-bottom:1px solid var(--glass-b)}
+.sec:last-child{border-bottom:0;margin-bottom:0;padding-bottom:0}
+.sec h2{font-family:var(--serif);font-style:italic;font-weight:400;font-size:22px;margin:0 0 10px;display:flex;justify-content:space-between;align-items:baseline}
+.sec h2 small{font:600 9.5px/1 var(--mono);letter-spacing:.18em;text-transform:uppercase;color:var(--ink3);font-style:normal}
+.row{display:flex;gap:6px}
+button{font:600 11.5px/1 var(--sans);letter-spacing:.02em;color:var(--ink);background:transparent;border:1px solid var(--track);
+  border-radius:10px;padding:9px 8px;cursor:pointer;flex:1;transition:background .15s,border-color .15s,transform .08s;white-space:nowrap}
+button:hover{background:var(--track)}
+button:active{transform:translateY(1px)}
+button.primary{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+button.primary:hover{opacity:.88;background:var(--ink)}
+button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.meter{margin:12px 0 8px}
+.meter .lbl{display:flex;justify-content:space-between;font:600 9.5px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--ink3);margin-bottom:6px}
+.bar{height:6px;border-radius:6px;background:var(--track);overflow:hidden}
+.bar i{display:block;height:100%;width:0;border-radius:6px;background:linear-gradient(90deg,var(--accent2),var(--accent));transition:width .15s}
+.counts{display:flex;justify-content:space-between;font:500 11px/1.2 var(--mono);color:var(--ink2);margin-top:10px}
+.counts b{display:block;font:400 22px/1 var(--serif);font-style:italic;color:var(--ink);margin-bottom:3px}
+.counts div{flex:1}
+.counts div+div{border-left:1px solid var(--glass-b);padding-left:10px}
+.flav{display:flex;gap:6px}
+.flav button{display:flex;flex-direction:column;align-items:center;gap:6px;padding:9px 4px 8px}
+.flav button i{width:26px;height:26px;border-radius:50%;box-shadow:inset 0 -4px 8px rgba(0,0,0,.25),inset 0 3px 6px rgba(255,255,255,.5)}
+.flav button[aria-pressed=true]{border-color:var(--ink);background:var(--track)}
+.slider{margin-top:12px}
+.slider .lbl{display:flex;justify-content:space-between;font:600 9.5px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--ink3);margin-bottom:6px}
+.slider .lbl output{color:var(--ink2)}
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:18px;background:transparent;margin:0;cursor:pointer}
+input[type=range]::-webkit-slider-runnable-track{height:4px;border-radius:4px;background:var(--track)}
+input[type=range]::-moz-range-track{height:4px;border-radius:4px;background:var(--track)}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:var(--ink);margin-top:-6px;border:3px solid var(--bg);box-shadow:0 1px 4px rgba(0,0,0,.3)}
+input[type=range]::-moz-range-thumb{width:12px;height:12px;border-radius:50%;background:var(--ink);border:3px solid var(--bg)}
+#howto{left:28px;bottom:22px;max-width:520px;pointer-events:none}
+#howto *{pointer-events:none}
+#howto .line{font-family:var(--serif);font-style:italic;font-size:17px;color:var(--ink)}
+#howto .line kbd{font:600 10px/1 var(--mono);font-style:normal;border:1px solid var(--track);border-radius:5px;padding:2px 5px;margin:0 2px;color:var(--ink2);vertical-align:2px}
+#howto p{margin:5px 0 0;font:500 11px/1.55 var(--mono);color:var(--ink3);letter-spacing:.01em}
+#fallback{position:fixed;inset:0;z-index:5;display:none;align-items:center;justify-content:center;padding:24px;background:var(--bg)}
+#fallback .card{max-width:440px;padding:32px 30px;border-radius:20px;background:var(--glass);border:1px solid var(--glass-b);box-shadow:var(--shadow)}
+#fallback h3{font-family:var(--serif);font-style:italic;font-weight:400;font-size:38px;margin:12px 0 10px;line-height:1}
+#fallback p{font-family:var(--serif);font-size:15.5px;line-height:1.5;color:var(--ink2);margin:0 0 10px}
+#fallback code{font:500 12px var(--mono);background:var(--track);padding:2px 5px;border-radius:4px}
+body.na #fallback{display:flex}
+body.na #panel,body.na #howto{display:none}
+@media (max-width:760px){
+  #masthead{left:18px;top:16px;max-width:70%}
+  h1{font-size:42px;margin:10px 0 8px}
+  .lede{display:none}
+  #status{margin-top:8px}
+  #howto{display:none}
+  #panel{left:0;right:0;top:auto;bottom:0;width:auto;max-height:62vh;border-radius:18px 18px 0 0;padding:6px 18px calc(14px + env(safe-area-inset-bottom));
+    transform:translateY(calc(100% - 134px));transition:transform .35s cubic-bezier(.2,.8,.2,1),background .8s}
+  #panel.open{transform:none}
+  .handle{display:flex;flex-direction:column;align-items:center;gap:6px;padding:6px 0 10px;cursor:pointer;border:0;width:100%;background:none}
+  .handle i{width:40px;height:4px;border-radius:4px;background:var(--track)}
+  .handle span{font:600 9.5px/1 var(--mono);letter-spacing:.18em;text-transform:uppercase;color:var(--ink3)}
+}
+@media (prefers-reduced-motion:reduce){
+  *{transition:none!important;animation:none!important}
+}
+</style>
+</head>
+<body>
+<canvas id="gl" tabindex="0" aria-label="Interactive pirate jelly diorama"></canvas>
+
+<header id="masthead" class="ui">
+  <div class="eyebrow"><i></i>Material Studies · Nº 07</div>
+  <h1><span>Pirate</span><span><em>Jelly.</em></span></h1>
+  <p class="lede">A wobbling block of lagoon gelatin with a castaway island inside — Skull Rock, a buried chest and a brig riding at anchor. Shallow-water waves, buoyancy and cannon fire, all simulated live.</p>
+  <div id="status"><b></b><span>WebGPU · starting</span></div>
+</header>
+
+<aside id="panel" class="ui" aria-label="Controls">
+  <button class="handle" id="handle" aria-expanded="false"><i></i><span>Controls</span></button>
+  <section class="sec">
+    <h2>The Cove <small>Actions</small></h2>
+    <div class="row">
+      <button id="bFire" class="primary">Fire a shot</button>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <button id="bCoins">Doubloons</button>
+      <button id="bBarrel">Barrel</button>
+    </div>
+    <div class="meter"><div class="lbl"><span>Vigour</span><span id="vigV">calm</span></div><div class="bar"><i id="vig"></i></div></div>
+    <div class="counts">
+      <div><b id="cShots">0</b>shots</div>
+      <div><b id="cFloat">0</b>afloat</div>
+      <div><b id="cSunk">0</b>sunk</div>
+    </div>
+  </section>
+  <section class="sec">
+    <h2>Flavour <small>Jelly</small></h2>
+    <div class="flav" id="flav">
+      <button data-f="0" aria-pressed="true"><i style="background:#3cb7ad"></i>Lagoon</button>
+      <button data-f="1" aria-pressed="false"><i style="background:#d9902e"></i>Rum</button>
+      <button data-f="2" aria-pressed="false"><i style="background:#7a4bb3"></i>Kraken</button>
+    </div>
+    <div class="slider"><div class="lbl"><span>Firmness</span><output id="oFirm">62</output></div><input id="sFirm" type="range" min="0" max="100" value="62" aria-label="Firmness"></div>
+    <div class="slider"><div class="lbl"><span>Wave damping</span><output id="oDamp">30</output></div><input id="sDamp" type="range" min="0" max="100" value="30" aria-label="Wave damping"></div>
+    <div class="slider"><div class="lbl"><span>Time of day</span><output id="oTime">Noon</output></div><input id="sTime" type="range" min="0" max="1000" value="80" aria-label="Time of day"></div>
+  </section>
+  <section class="sec">
+    <div class="row">
+      <button id="bReset">Reset</button>
+      <button id="bPause">Pause</button>
+      <button id="bView">Reset view</button>
+    </div>
+  </section>
+</aside>
+
+<footer id="howto" class="ui">
+  <div class="line">How to play — click the ship to fire, <kbd>Space</kbd> for a broadside.</div>
+  <p>Drag the ship against its anchor · click the chest, campfire or the X · drag water to make waves · drag a side of the block to tilt it · grab &amp; throw balls, barrels, coins · drag a palm to bend it · drag empty space or right-drag to orbit · wheel / pinch to zoom</p>
+</footer>
+
+<div id="fallback"><div class="card">
+  <div class="eyebrow"><i></i>Material Studies · Nº 07</div>
+  <h3>The jelly won't set.</h3>
+  <p id="fbMsg">This study renders with <b>WebGPU</b>, which isn't available in this browser or on this GPU adapter.</p>
+  <p>Try a recent Chrome, Edge or Safari 26+, or enable WebGPU in your browser flags (e.g. <code>chrome://flags/#enable-unsafe-webgpu</code>).</p>
+</div></div>
+
+<script type="module">
+"use strict";
