@@ -75,7 +75,7 @@ async function main() {
   const buf = (data, usage) => { const b = device.createBuffer({ size: Math.max(16, data.byteLength + 3 & ~3), usage: usage | GPUBufferUsage.COPY_DST }); device.queue.writeBuffer(b, 0, data); return b; };
   let nodeVB = buf(world.V, GPUBufferUsage.VERTEX), nodeIB = buf(world.I, GPUBufferUsage.INDEX);
   let gridVB = buf(grid.V, GPUBufferUsage.VERTEX), gridIB = buf(grid.I, GPUBufferUsage.INDEX);
-  const UF = new Float32Array(168);
+  const UF = new Float32Array(172);
   const uniBuf = device.createBuffer({ size: UF.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   const nodeF = new Float32Array(NODE_COUNT * 20);
   const nodeBuf = device.createBuffer({ size: nodeF.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
@@ -138,7 +138,7 @@ async function main() {
   const depthW = { format: DEPTH, depthWriteEnabled: true, depthCompare: 'less' };
   const shadowDS = { format: DEPTH, depthWriteEnabled: true, depthCompare: 'less', depthBias: 3, depthBiasSlopeScale: 2.5 };
   const P = (o) => device.createRenderPipeline(o);
-  const pNodeSh = P({ layout: L0, vertex: { module: mNodesSh, entryPoint: 'vsShadow', buffers: nodeLayout }, primitive: { cullMode: 'none' }, depthStencil: shadowDS });
+  const pNodeSh = P({ layout: L0, vertex: { module: mNodesSh, entryPoint: 'vsShadow', buffers: nodeLayout }, fragment: { module: mNodesSh, entryPoint: 'fsShadow', targets: [] }, primitive: { cullMode: 'none' }, depthStencil: shadowDS });
   const pTerrSh = P({ layout: L0, vertex: { module: mTerrSh, entryPoint: 'vsShadow', buffers: gridLayout }, primitive: { cullMode: 'none' }, depthStencil: shadowDS });
   const tgtHDR = [{ format: HDR }];
   const pBg = P({ layout: L1, vertex: { module: mBg, entryPoint: 'vsBg' }, fragment: { module: mBg, entryPoint: 'fsBg', targets: tgtHDR }, depthStencil: { format: DEPTH, depthWriteEnabled: false, depthCompare: 'always' } });
@@ -194,7 +194,7 @@ async function main() {
     const [tx, tz] = S.tilt;
     const lift = HALF * (Math.abs(Math.sin(tx)) + Math.abs(Math.sin(tz)));
     const R = M4.mul(M4.RX(tx), M4.RZ(tz));
-    blockM = M4.mul(M4.T(0, lift, 0), R);
+    blockM = M4.mul(M4.mul(M4.T(0, lift, 0), R), M4.T(-BC[0], 0, -BC[1]));
     invBlockM = M4.inv(blockM);
     gLocal = M4.xv(M4.inv(R), [0, -G_BODY, 0]);
   }
@@ -242,7 +242,7 @@ async function main() {
     const b = freeBody('barrel'); b.spawn([rr(-1.2, 2.0), WL + 0.9, rr(0.2, 2.1)], [0, 0, 0]); b.w = [rr(-2, 2), rr(-2, 2), 0];
   }
   function popX() {
-    const [x, z] = LAYOUT.xmark, y = water.ground(x, z);
+    const x = LAYOUT.xmark[0] - ORIGIN[0], z = LAYOUT.xmark[1] - ORIGIN[1], y = water.ground(x, z);
     dropCoins(3, [x, y, z]);
     for (let i = 0; i < 26; i++) parts.emit({ p: [x + rr(-.05, .05), y + 0.02, z + rr(-.05, .05)], v: [rr(-.7, .7), rr(1, 2.2), rr(-.7, .7)], life: rr(0.5, 1), s0: rr(0.012, 0.025), s1: 0.03, c0: [0.92, 0.8, 0.58, 0.9], kind: 0, grav: 5, drag: 0.6 });
   }
@@ -251,6 +251,7 @@ async function main() {
     for (let i = 0; i < 50; i++) parts.emit({ p: vadd(info.fire, [rr(-.05, .05), 0, rr(-.05, .05)]), v: [rr(-.6, .6), rr(1.2, 2.8), rr(-.6, .6)], life: rr(0.8, 1.8), s0: rr(0.008, 0.016), s1: 0.004, c0: [3, 1.6, 0.4, 1], c1: [2, 0.4, 0.05, 0.8], kind: 1, add: 1, drag: 1.2, grav: 1.2 });
   }
   function resetAll() {
+    if (ORIGIN[0] || ORIGIN[1] || BC[0] || BC[1]) { hooks.onRebuild(CFG()); return; }
     terrain.reset(); water.reset(); ship.reset(); for (const b of bodies) b.alive = false; parts.n = 0;
     if (VOY()) camHome();
     chest.ang = chest.vel = chest.target = 0; chest.open = false; S.shots = 0; S.tilt = [0, 0]; S.tiltV = [0, 0];
@@ -314,7 +315,7 @@ async function main() {
       b.contact = true; b.cn = n;
     }
     // walls of the block
-    for (const c of [0, 2]) if (Math.abs(b.p[c]) > HALF - b.r) { b.p[c] = Math.sign(b.p[c]) * (HALF - b.r); if (b.v[c] * Math.sign(b.p[c]) > 0) { b.v[c] *= -0.35; S.shearV[c ? 1 : 0] += b.v[c] * 0.02; } }
+    for (const c of [0, 2]) { const o = BC[c >> 1], d = b.p[c] - o; if (Math.abs(d) > HALF - b.r) { b.p[c] = o + Math.sign(d) * (HALF - b.r); if (b.v[c] * Math.sign(d) > 0) { b.v[c] *= -0.35; S.shearV[c ? 1 : 0] += b.v[c] * 0.02; } } }
     if (b.p[1] < b.r) { b.p[1] = b.r; b.v[1] = Math.abs(b.v[1]) * 0.2; }
     // skull rock (SDF)
     { const [sx, sy, sz] = info.skull.p, yaw = info.skull.yaw, c = Math.cos(-yaw), s = Math.sin(-yaw);
@@ -407,9 +408,14 @@ async function main() {
     const V = CFG().voyage;
     ship.anchored = !VOY();
     ship.control = VOY() ? { thrust: (keys.up ? 1 : 0) - (keys.down ? 1 : 0), turn: (keys.left ? 1 : 0) - (keys.right ? 1 : 0), power: V.thrust, reverse: V.reverse, rudder: V.turn } : null;
-    ship.rock = [info.skull.p[0], info.skull.p[2], 0.62 * info.skull.s];
+    ship.rocks = [[info.skull.p[0], info.skull.p[2], 0.62 * info.skull.s], ...chunkRocks()];
     ship.step(dt, water, gLocal, S.wind, info.anchorRing);
     water.follow(ship.pos[0], ship.pos[2]);
+    if (INFINITE) {   // the block travels with the ship
+      const nx = Math.round(ship.pos[0] / TDX) * TDX, nz = Math.round(ship.pos[2] / TDX) * TDX;
+      if (nx !== BC[0] || nz !== BC[1]) { BC[0] = nx; BC[1] = nz; terrain.follow(); }
+      if (Math.hypot(BC[0], BC[1]) > 512) rebase();
+    }
     for (const b of bodies) stepBody(b, dt);
     collideBodies();
     const tension = lerp(Wv.tensionSoft, Wv.tensionFirm, S.firm);
@@ -456,11 +462,49 @@ async function main() {
     }
   }
 
+  // ── streamed chunks (infinite worlds) ──
+  const chunks = new Map(), freeNodes = [];
+  for (let i = NODE.NCHUNK; i--;) freeNodes.push(NODE.CHUNK + i);
+  const chunkRocks = () => { const out = []; for (const c of chunks.values()) for (const r of c.rocks) out.push([r[0] - ORIGIN[0], r[1] - ORIGIN[1], r[2]]); return out; };
+  function dropChunk(key) { const c = chunks.get(key); c.vb.destroy(); c.ib.destroy(); freeNodes.push(c.node); nodeF.fill(0, c.node * 20, c.node * 20 + 20); chunks.delete(key); }
+  function dropAllChunks() { for (const k of [...chunks.keys()]) dropChunk(k); }
+  function streamChunks(budgetMs) {
+    if (!INFINITE) { if (chunks.size) dropAllChunks(); return; }
+    const gx = BC[0] + ORIGIN[0], gz = BC[1] + ORIGIN[1], R = HALF + 1;
+    const ci0 = Math.floor((gx - R) / CHUNK), ci1 = Math.floor((gx + R) / CHUNK), cj0 = Math.floor((gz - R) / CHUNK), cj1 = Math.floor((gz + R) / CHUNK);
+    const want = [];
+    for (let i = ci0; i <= ci1; i++) for (let j = cj0; j <= cj1; j++) want.push([i, j, Math.hypot((i + 0.5) * CHUNK - gx, (j + 0.5) * CHUNK - gz)]);
+    const keep = new Set(want.map(([i, j]) => i * 100003 + j));
+    for (const k of [...chunks.keys()]) if (!keep.has(k)) dropChunk(k);
+    want.sort((a, b) => a[2] - b[2]);
+    const t0 = performance.now();
+    for (const [i, j] of want) {
+      const key = i * 100003 + j; if (chunks.has(key) || !freeNodes.length) continue;
+      const d = chunkDesc(i, j), node = freeNodes.pop(), g = buildChunk(d, node);
+      chunks.set(key, { node, x0: d.x0, z0: d.z0, count: g.I.length, vb: buf(g.V.length ? g.V : new Float32Array(12), GPUBufferUsage.VERTEX), ib: buf(g.I.length ? g.I : new Uint32Array(3), GPUBufferUsage.INDEX), rocks: g.rocks });
+      if (performance.now() - t0 > budgetMs) break;
+    }
+  }
+  function drawChunks(p) { for (const c of chunks.values()) if (c.count) { p.setVertexBuffer(0, c.vb); p.setIndexBuffer(c.ib, 'uint32'); p.drawIndexed(c.count); } }
+  // floating origin: keep simulation coordinates small however far she sails
+  function rebase() {
+    const q = TDX * 64, dx = Math.round(BC[0] / q) * q, dz = Math.round(BC[1] / q) * q;
+    ORIGIN[0] += dx; ORIGIN[1] += dz;
+    const sh = p => { if (p) { p[0] -= dx; p[2] -= dz; } };
+    sh(ship.pos); for (const b of bodies) if (b.alive) sh(b.p);
+    for (let i = 0; i < parts.n; i++) { parts.a.x[i] -= dx; parts.a.z[i] -= dz; }
+    BC[0] -= dx; BC[1] -= dz; terrain.ox -= dx; terrain.oz -= dz; water.ox -= dx; water.oz -= dz;
+    new Set([info.fire, info.chest.p, info.anchorRing, info.skull.p, ...info.skullEyes, ...info.bushes, ...statics.map(s => s.c)]).forEach(sh);
+    for (const p of palms) sh(p.base);
+    if (ptrWater) { ptrWater[0] -= dx; ptrWater[1] -= dz; }
+  }
+
   // ── uniforms & node matrices ──
   function updateNodes() {
     const put = (i, m, p = [0, 0, 0, 0]) => { nodeF.set(m, i * 20); nodeF.set(p, i * 20 + 16); };
     const zero = new Float32Array(16);
-    put(0, M4.id());
+    put(0, M4.T(-ORIGIN[0], 0, -ORIGIN[1]));
+    for (const ch of chunks.values()) put(ch.node, M4.T(ch.x0 - ORIGIN[0], 0, ch.z0 - ORIGIN[1]));
     put(NODE.SHIP, Q.mat(ship.q, ship.pos));
     const c = info.chest;
     put(NODE.LID, M4.mul(M4.mul(M4.mul(M4.T(c.p[0], c.p[1], c.p[2]), M4.RY(c.yaw)), M4.T(0, c.h, -c.d / 2)), M4.RX(-chest.ang)));
@@ -494,7 +538,7 @@ async function main() {
     v4(fl.abs[0], fl.abs[1], fl.abs[2], WL);
     v4(fl.col[0], fl.col[1], fl.col[2], 0.9);
     v4(S.shear[0], S.shear[1], S.squash, WL + 0.3);
-    v4(D.night, D.stars, LAYOUT.xmark[0], LAYOUT.xmark[1]);
+    v4(D.night, D.stars, LAYOUT.xmark[0] - ORIGIN[0], LAYOUT.xmark[1] - ORIGIN[1]);
     v4(W, H, S.wind[0] * 3, S.wind[1] * 3 * (REDUCED ? 0.4 : 1));
     v4(GN, GDX, water.ox, water.oz);
     v4(moonDir[0], moonDir[1], moonDir[2], D.moon);
@@ -505,6 +549,7 @@ async function main() {
     v4(D.glow, 0, 0, 0);
     v4(HALF, TN, BLOCK, TDX);
     v4(SWELL.amp, SWELL.length, SWELL.speed, SWELL.fade);
+    v4(BC[0], BC[1], 0, 0);
     device.queue.writeBuffer(uniBuf, 0, UF);
   }
 
@@ -527,8 +572,8 @@ async function main() {
     const cand = (t, kind, extra) => { if (t < best.t) best = { t, kind, ...extra }; };
     // terrain blocker (ray march)
     let tTerr = Infinity;
-    { const bx = rayBox(ro, rd, [-HALF, 0, -HALF], [HALF, 3, HALF]); let t = bx ? bx.t : 0;
-      for (let i = 0; i < 260 && t < 30; i++) { const p = vmad(ro, rd, t); if (Math.abs(p[0]) > HALF + 0.01 || Math.abs(p[2]) > HALF + 0.01) { if (i > 3) break; } else if (p[1] < water.ground(p[0], p[2])) { tTerr = t; break; } t += 0.02; } }
+    { const bx = rayBox(ro, rd, [BC[0] - HALF, 0, BC[1] - HALF], [BC[0] + HALF, 3, BC[1] + HALF]); let t = bx ? bx.t : 0;
+      for (let i = 0; i < 700 && t < 40; i++) { const p = vmad(ro, rd, t); if (!inBlock(p[0], p[2], -0.01)) { if (i > 3) break; } else if (p[1] < water.ground(p[0], p[2])) { tTerr = t; break; } t += 0.02; } }
     for (const b of bodies) if (b.alive) cand(raySphere(ro, rd, b.p, b.r * 1.8 + 0.02), 'body', { body: b });
     { const lr = Q.rot(Q.conj(ship.q), rd), lo = ship.toLocal(ro);
       const h1 = rayBox(lo, lr, [-0.27, -0.2, -0.82], [0.27, 0.4, 0.85]), h2 = rayBox(lo, lr, [-0.38, 0.4, -0.6], [0.38, 1.7, 0.6]);
@@ -540,7 +585,7 @@ async function main() {
       for (let k = 0; k <= 5; k++) cand(raySphere(ro, rd, vadd(p.base, vadd(palmPath(p, k / 5), vscale(p.bend, (k / 5) ** 2))), k === 5 ? 0.24 : 0.07), 'palm', { palm: p });
     });
     // water surface / block sides
-    const top = rayBox(ro, rd, [-HALF, 0, -HALF], [HALF, WL, HALF]);
+    const top = rayBox(ro, rd, [BC[0] - HALF, 0, BC[1] - HALF], [BC[0] + HALF, WL, BC[1] + HALF]);
     if (top) {
       if (top.face === 1) { const p = vmad(ro, rd, top.t); if (water.ground(p[0], p[2]) < WL) cand(top.t, 'water', { hp: p }); }
       else if (!VOY()) cand(top.t, 'tilt', { hp: vmad(ro, rd, top.t) });
@@ -625,11 +670,11 @@ async function main() {
       case 'orbit': orbit(dx, dy); break;
       case 'body': {
         const n = vnorm(M4.xv(invBlockM, camF)), hp = planeHit(ro, rd, act.plane, n);
-        if (hp) { hp[0] = clamp(hp[0], -HALF + 0.1, HALF - 0.1); hp[2] = clamp(hp[2], -HALF + 0.1, HALF - 0.1); hp[1] = Math.max(hp[1], water.ground(hp[0], hp[2]) + act.body.r); act.body.p = hp; }
+        if (hp) { hp[0] = clamp(hp[0], BC[0] - HALF + 0.1, BC[0] + HALF - 0.1); hp[2] = clamp(hp[2], BC[1] - HALF + 0.1, BC[1] + HALF - 0.1); hp[1] = Math.max(hp[1], water.ground(hp[0], hp[2]) + act.body.r); act.body.p = hp; }
         break;
       }
       case 'ship': { const hp = planeHit(ro, rd, [0, WL, 0], [0, 1, 0]); if (hp && act.moved) ship.drag = { local: act.local, target: hp }; break; }
-      case 'water': { const hp = planeHit(ro, rd, [0, WL, 0], [0, 1, 0]); ptrWater = hp && Math.abs(hp[0]) < HALF && Math.abs(hp[2]) < HALF ? [hp[0], hp[2]] : null; break; }
+      case 'water': { const hp = planeHit(ro, rd, [0, WL, 0], [0, 1, 0]); ptrWater = hp && inBlock(hp[0], hp[2]) ? [hp[0], hp[2]] : null; break; }
       case 'tilt': {
         const tx = act.x - act.x0, ty = act.y - act.y0;
         const rx = [camR[0], camR[2]], fz = vnorm([camF[0], 0, camF[2]]);
@@ -696,6 +741,7 @@ async function main() {
     },
     onRebuild(c) {
       setWorld(c.world); applySceneConfig(c.scene);
+      ORIGIN[0] = ORIGIN[1] = 0; BC[0] = BC[1] = 0; dropAllChunks();
       makeWorld();
       terrain = new Terrain(); water = new Water(terrain);
       for (const b of [nodeVB, nodeIB, gridVB, gridIB, hfTex, terrTex]) b.destroy();
@@ -732,6 +778,7 @@ async function main() {
       if (act && act.kind === 'body') { const b = act.body; act.vel = vlerp(act.vel, vscale(vsub(b.p, act.last), 1 / dt), 0.5); act.last = [...b.p]; }
     } else { parts.step(0, S.wind, water); }
     const E = water.finishFrame(dt);
+    streamChunks(TEST ? 50 : 5);
     computeBlock(); if (VOY()) followCamera(dt); computeCamera();
     updateUniforms(D); updateNodes();
     device.queue.writeTexture({ texture: hfTex }, water.tex, { bytesPerRow: GN * 16 }, [GN, GN]);
@@ -744,6 +791,7 @@ async function main() {
     { const p = enc.beginRenderPass({ colorAttachments: [], depthStencilAttachment: { view: shadowTex.createView(), depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' } });
       p.setBindGroup(0, bg0);
       p.setPipeline(pNodeSh); p.setVertexBuffer(0, nodeVB); p.setIndexBuffer(nodeIB, 'uint32'); p.drawIndexed(world.I.length);
+      drawChunks(p);
       p.setPipeline(pTerrSh); p.setVertexBuffer(0, gridVB); p.setIndexBuffer(gridIB, 'uint32'); p.drawIndexed(grid.I.length);
       p.end(); }
     { const p = enc.beginRenderPass({ colorAttachments: [{ view: sceneTex.createView(), clearValue: { r: 0, g: 0, b: 0, a: 1e4 }, loadOp: 'clear', storeOp: 'store' }],
@@ -753,6 +801,7 @@ async function main() {
       p.setPipeline(pFloor); p.draw(6);
       p.setPipeline(pTerr); p.setVertexBuffer(0, gridVB); p.setIndexBuffer(gridIB, 'uint32'); p.drawIndexed(grid.I.length);
       p.setPipeline(pNodes); p.setVertexBuffer(0, nodeVB); p.setIndexBuffer(nodeIB, 'uint32'); p.drawIndexed(world.I.length);
+      drawChunks(p);
       if (counts[0]) { p.setPipeline(pPartA); p.setVertexBuffer(0, partBuf); p.draw(4, counts[0], 0, 0); }
       p.end(); }
     enc.copyTextureToTexture({ texture: sceneTex }, { texture: hdr2 }, [W, H]);
@@ -783,6 +832,7 @@ async function main() {
       Shell.meter('vigour', vigSm, vigSm < 0.12 ? '平静' : vigSm < 0.35 ? '活跃' : vigSm < 0.65 ? '起伏' : '风暴');
       Shell.count('shots', S.shots); Shell.count('afloat', afloat); Shell.count('sunk', sunk);
       { const sp = vlen([ship.vel[0], 0, ship.vel[2]]); Shell.meter('speed', sp / 1.3, (sp * 8).toFixed(1) + ' 节'); }
+      if (INFINITE) Shell.count('distance', Math.round(Math.hypot(ship.pos[0] + ORIGIN[0] - LAYOUT.ship[0], ship.pos[2] + ORIGIN[1] - LAYOUT.ship[1]) * 10));
       const isDark = D.night > CFG().theme.darkAt;
       if (isDark !== dark) { dark = isDark; Shell.setDark(isDark); }
     }

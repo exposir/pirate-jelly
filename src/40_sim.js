@@ -16,21 +16,40 @@ function sampGrid(a, N, dx, ox, oz, x, z) {
   return lerp(lerp(c(i0, j0), c(i0 + 1, j0), fx), lerp(c(i0, j0 + 1), c(i0 + 1, j0 + 1), fx), fz);
 }
 class Terrain {
+  // TN×TN heights covering the jelly block (centre BC); in infinite worlds it scrolls with the block
   constructor() { this.load(); }
+  gen(x, z) { return terrainFn(x + ORIGIN[0], z + ORIGIN[1]); }
   load() {
-    this.N = TN; this.dx = TDX; this.h0 = new Float32Array(TN * TN);
-    for (let j = 0; j < TN; j++) for (let i = 0; i < TN; i++) this.h0[j * TN + i] = terrainFn(-HALF + (i + 0.5) * TDX, -HALF + (j + 0.5) * TDX);
-    this.h = this.h0.slice(); this.dirty = true;
+    this.N = TN; this.dx = TDX; this.ox = BC[0] - HALF; this.oz = BC[1] - HALF;
+    this.h = new Float32Array(TN * TN);
+    for (let j = 0; j < TN; j++) for (let i = 0; i < TN; i++) this.h[j * TN + i] = this.gen(this.ox + (i + 0.5) * TDX, this.oz + (j + 0.5) * TDX);
+    this.dirty = true;
   }
-  reset() { this.h.set(this.h0); this.dirty = true; }
-  at(x, z) { return sampGrid(this.h, this.N, this.dx, -HALF, -HALF, x, z); }
+  reset() { this.load(); }
+  // re-centre on the block: shift by whole cells and generate only the newly exposed strips
+  follow() {
+    const N = this.N, dx = this.dx, ki = Math.round((BC[0] - HALF - this.ox) / dx), kj = Math.round((BC[1] - HALF - this.oz) / dx);
+    if (!ki && !kj) return;
+    if (Math.abs(ki) >= N || Math.abs(kj) >= N) { this.load(); return; }
+    const o = new Float32Array(N * N), nox = this.ox + ki * dx, noz = this.oz + kj * dx;
+    for (let j = 0; j < N; j++) {
+      const sj = j + kj, inJ = sj >= 0 && sj < N;
+      for (let i = 0; i < N; i++) {
+        const si = i + ki;
+        o[j * N + i] = inJ && si >= 0 && si < N ? this.h[sj * N + si] : this.gen(nox + (i + 0.5) * dx, noz + (j + 0.5) * dx);
+      }
+    }
+    this.h = o; this.ox = nox; this.oz = noz; this.dirty = true;
+  }
+  at(x, z) { return sampGrid(this.h, this.N, this.dx, this.ox, this.oz, x, z); }
   normal(x, z) { const e = this.dx; return vnorm([this.at(x - e, z) - this.at(x + e, z), 2 * e, this.at(x, z - e) - this.at(x, z + e)]); }
   crater(x, z, r, depth) {
-    splatGrid(this.h, this.N, this.dx, -HALF, -HALF, x, z, r, -depth);
-    splatGrid(this.h, this.N, this.dx, -HALF, -HALF, x, z, r * 1.8, depth * 0.25);
+    splatGrid(this.h, this.N, this.dx, this.ox, this.oz, x, z, r, -depth);
+    splatGrid(this.h, this.N, this.dx, this.ox, this.oz, x, z, r * 1.8, depth * 0.25);
     this.dirty = true;
   }
 }
+const inBlock = (x, z, m = 0) => Math.abs(x - BC[0]) < HALF - m && Math.abs(z - BC[1]) < HALF - m;
 
 // ───────────────────────── shallow water (staggered grid, CPU) ─────────────────────────
 // Simulated in a window of GN×GN cells. When the window is smaller than the block it follows
@@ -57,7 +76,7 @@ class Water {
     const N = this.N, D = this.D = new Float32Array(N * N), wet = this.wet = new Uint8Array(N * N);
     for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
       const x = this.ox + (i + 0.5) * this.dx, z = this.oz + (j + 0.5) * this.dx, k = j * N + i;
-      const inside = Math.abs(x) < HALF && Math.abs(z) < HALF;
+      const inside = inBlock(x, z);
       D[k] = inside ? Math.max(WL - this.terrain.at(x, z), 0) : 0; wet[k] = D[k] > 0.012 ? 1 : 0;
     }
   }
@@ -186,7 +205,7 @@ class Particles {
       a.vy[i] = a.vy[i] * kd - a.grav[i] * dt;
       a.x[i] += a.vx[i] * dt; a.y[i] += a.vy[i] * dt; a.z[i] += a.vz[i] * dt; a.rot[i] += a.rotv[i] * dt;
       if (a.buoy[i] && a.y[i] > water.height(a.x[i], a.z[i]) - 0.01) { this.kill(i); i--; continue; }
-      if (a.grav[i] > 0 && !a.under[i] && Math.abs(a.x[i]) < HALF && Math.abs(a.z[i]) < HALF && a.y[i] < water.ground(a.x[i], a.z[i])) { this.kill(i); i--; continue; }
+      if (a.grav[i] > 0 && !a.under[i] && inBlock(a.x[i], a.z[i]) && a.y[i] < water.ground(a.x[i], a.z[i])) { this.kill(i); i--; continue; }
     }
   }
   // pack into [under-alpha | alpha | additive]; returns counts
@@ -269,8 +288,8 @@ class Ship {
       const vp = vadd(this.vel, vcross(this.w, vsub(p, this.pos))), vn = vdot(vp, h);
       force(vscale(h, pen * 60 - Math.min(vn, 0) * 6), [p[0], this.pos[1], p[2]]);
     }
-    if (this.rock) {   // Skull Rock as a round pillar
-      const [rx, rz, rr2] = this.rock;
+    for (const [rx, rz, rr2] of this.rocks || []) {   // Skull Rock and sea stacks as round pillars
+      if (Math.abs(rx - this.pos[0]) > 2 || Math.abs(rz - this.pos[2]) > 2) continue;
       for (const lp of SHIP_PROBES) {
         const p = this.toWorld(lp), dx = p[0] - rx, dz = p[2] - rz, d = Math.hypot(dx, dz);
         if (d < rr2 && d > 1e-4) { const h = [dx / d, 0, dz / d], vn = vdot(this.vel, h); force(vscale(h, (rr2 - d) * 60 - Math.min(vn, 0) * 6), [p[0], this.pos[1], p[2]]); }
@@ -314,7 +333,7 @@ class Ship {
       force([dd[0] * 7 - vg[0] * 1.5, 0, dd[2] * 7 - vg[2] * 1.5], [gp[0], this.pos[1], gp[2]]);
     }
     // stay inside the jelly
-    for (const c of [0, 2]) {
+    if (!INFINITE) for (const c of [0, 2]) {
       const lim = HALF - 0.45, o = this.pos[c];
       if (Math.abs(o) > lim) F[c] -= (o - Math.sign(o) * lim) * 20 + this.vel[c] * 2;
     }

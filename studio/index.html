@@ -643,12 +643,41 @@ let TN = 128, TDX = BLOCK / TN;                       // global terrain grid
 let GN = 128, GDX = BLOCK / GN;                       // water simulation window
 const SWELL = { amp: 0, length: 1.6, speed: 1.2, fade: 0 };
 const ISLETS = [];                                    // extra islands for large worlds: { x, z, r, h }
+// infinite worlds: the block follows the ship; content comes from deterministic chunks
+let INFINITE = false;
+const ORIGIN = [0, 0];                                // generator coords = sim coords + ORIGIN (floating origin)
+const BC = [0, 0];                                    // block centre in sim coords
+const CHUNK = 8, HOME_R = 13;                         // chunk size; no generated islets near the home island
+const _chunks = new Map();
+function chunkDesc(ci, cj) {
+  const key = ci * 100003 + cj;
+  let d = _chunks.get(key); if (d) return d;
+  let sd = (Math.abs(Math.floor(hash2(ci * 1.37 + 0.5, cj * 2.11 + 0.25) * 2147483000)) % 2147483000) + 1;
+  const R = () => { sd = (sd * 16807) % 2147483647; return (sd - 1) / 2147483646; };
+  const x0 = ci * CHUNK, z0 = cj * CHUNK, home = (x, z, m) => Math.hypot(x, z) < HOME_R + m;
+  d = { ci, cj, x0, z0, islets: [], stacks: [], wreck: null, kelp: 2 + Math.floor(R() * 5), coins: Math.floor(R() * 4), bubbles: 4 + Math.floor(R() * 8), seed: Math.floor(R() * 1e6) };
+  if (R() < 0.42) { const r = 0.7 + R() * 0.9, x = x0 + 1.6 + R() * (CHUNK - 3.2), z = z0 + 1.6 + R() * (CHUNK - 3.2); if (!home(x, z, r)) d.islets.push({ x, z, r, h: 0.25 + R() * 0.35 }); }
+  for (let n = R() < 0.35 ? 1 + Math.floor(R() * 3) : 0; n--;) { const x = x0 + 0.5 + R() * (CHUNK - 1), z = z0 + 0.5 + R() * (CHUNK - 1); if (!home(x, z, 0.5)) d.stacks.push({ x, z, r: 0.18 + R() * 0.22, h: 0.35 + R() * 0.7 }); }
+  if (R() < 0.08) { const x = x0 + 2 + R() * (CHUNK - 4), z = z0 + 2 + R() * (CHUNK - 4); if (!home(x, z, 1)) d.wreck = { x, z, yaw: R() * TAU }; }
+  // keep generated features off each other
+  d.stacks = d.stacks.filter(t => d.islets.every(I => Math.hypot(t.x - I.x, t.z - I.z) > I.r * 1.6 + t.r));
+  _chunks.set(key, d);
+  if (_chunks.size > 4000) _chunks.clear();
+  return d;
+}
+function isletsNear(x, z) {
+  if (!INFINITE) return ISLETS;
+  const ci = Math.floor(x / CHUNK), cj = Math.floor(z / CHUNK), out = ISLETS.slice();
+  for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) out.push(...chunkDesc(ci + a, cj + b).islets);
+  return out;
+}
 function setWorld(w) {
   BLOCK = w.size; HALF = BLOCK / 2; TN = w.terrainRes; TDX = BLOCK / TN; GN = w.waterRes;
   GDX = w.waterCell > 0 ? w.waterCell : BLOCK / GN;
   if (GN * GDX > BLOCK) GDX = BLOCK / GN;
   Object.assign(SWELL, w.swell, { fade: GN * GDX < BLOCK - 1e-6 ? w.windowFade : 0 });
   ISLETS.length = 0; for (const it of w.islets || []) ISLETS.push({ ...it });
+  INFINITE = !!w.infinite;
 }
 const swellAt = (x, z, t) => {
   if (SWELL.amp <= 0) return 0;
@@ -783,7 +812,7 @@ function terrainFn(x, z) {
   hills *= (1 + 0.35 * fbm2(x * 2.2, z * 2.2, 3)) * LAYOUT.hills;
   h += hills * smooth(0.78, 0.45, r);
   // islets: sandy humps with a green crown
-  for (const I of ISLETS) {
+  for (const I of isletsNear(x, z)) {
     const d = Math.hypot(x - I.x, z - I.z) / I.r + 0.12 * fbm2(x * 2 + I.x, z * 2 + I.z, 2);
     if (d > 1.6) continue;
     let ih = lerp(sea, WL - 0.14, smooth(1.55, 1.1, d));
@@ -883,8 +912,8 @@ class MB {
 }
 
 // ───────────────────────── scene geometry ─────────────────────────
-const NODE = { STATIC: 0, SHIP: 1, LID: 2, PALM: 3, NPALM: 16, CHAIN: 19, NCHAIN: 26, BALL: 45, NBALL: 16, BARREL: 61, NBARREL: 8, COIN: 69, NCOIN: 30 };
-const NODE_COUNT = 100;
+const NODE = { STATIC: 0, SHIP: 1, LID: 2, PALM: 3, NPALM: 16, CHAIN: 19, NCHAIN: 26, BALL: 45, NBALL: 16, BARREL: 61, NBARREL: 8, COIN: 69, NCOIN: 30, CHUNK: 99, NCHUNK: 40 };
+const NODE_COUNT = 139;
 const COL = {
   hullBlack: [0.085, 0.075, 0.07], ochre: [0.78, 0.55, 0.17], red: [0.55, 0.12, 0.08], deck: [0.6, 0.42, 0.25],
   wood: [0.52, 0.33, 0.18], woodD: [0.33, 0.2, 0.11], iron: [0.12, 0.115, 0.11], gold: [1.0, 0.74, 0.25],
@@ -1292,12 +1321,9 @@ function buildSkull(b, info) {
   info.skullEyes = [eyeW(-1), eyeW(1)];
 }
 
-function buildSeabed(b, info) {
-  b.node = 0;
-  _seed = 777 + (Math.floor(FLORA.seed) % 1000);
-  // wreck — fore half of a ship on her side
-  const [wx, wz] = LAYOUT.wreck, wy = T0(wx, wz);
-  b.push().t(wx, wy + 0.17, wz).ry(-0.6).rz(1.25).s(0.9);
+function buildWreck(b, wx, wz, yaw, H) {
+  const wy = H(wx, wz);
+  b.push().t(wx, wy + 0.17, wz).ry(yaw).rz(1.25).s(0.9);
   const rot = hexc(0x5a4632), algae = hexc(0x4f6b3a);
   const wcol = (p) => vlerp(rot, algae, clamp(0.5 + 0.5 * noise3(p[0] * 6, p[1] * 6, p[2] * 6), 0, 1) * 0.7);
   for (let j = 0; j < 9; j++) {
@@ -1314,21 +1340,73 @@ function buildSeabed(b, info) {
   b.push().c(hexc(0x6b5238)).line(HULL.pt(0.5, 0.97, -1), HULL.pt(0.5, 0.97, 1), 0.012, 5).line(HULL.pt(0.72, 0.97, -1), HULL.pt(0.72, 0.97, 1), 0.012, 5).pop();
   b.pop();
   // broken mast + yard
-  b.push().c(hexc(0x5f4a33)).t(wx - 0.55, T0(wx - 0.55, wz - 0.2) + 0.03, wz - 0.2).ry(0.4).rz(PI / 2 - 0.12).t(0, -0.45, 0).cyl(0.025, 0.018, 0.85, 8).pop();
-  b.push().c(hexc(0x5f4a33)).t(wx - 0.35, T0(wx - 0.35, wz + 0.15) + 0.02, wz + 0.15).ry(-0.9).rz(PI / 2).t(0, -0.25, 0).cyl(0.012, 0.012, 0.5, 6).pop();
+  const c = Math.cos(yaw + 0.6), sn = Math.sin(yaw + 0.6), at = (dx, dz) => [wx + c * dx + sn * dz, wz - sn * dx + c * dz];
+  { const [x, z] = at(-0.55, -0.2); b.push().c(hexc(0x5f4a33)).t(x, H(x, z) + 0.03, z).ry(0.4 + yaw + 0.6).rz(PI / 2 - 0.12).t(0, -0.45, 0).cyl(0.025, 0.018, 0.85, 8).pop(); }
+  { const [x, z] = at(-0.35, 0.15); b.push().c(hexc(0x5f4a33)).t(x, H(x, z) + 0.02, z).ry(-0.9 + yaw + 0.6).rz(PI / 2).t(0, -0.25, 0).cyl(0.012, 0.012, 0.5, 6).pop(); }
+}
+function buildKelp(b, kx, kz, H) {
+  for (let s = 0; s < 4; s++) {
+    const x = kx + rr(-0.12, 0.12), z = kz + rr(-0.12, 0.12), y0 = H(x, z), Hh = (WL - 0.1 - y0) * rr(0.6, 0.95), ph = rnd() * 6;
+    if (Hh < 0.1) continue;
+    const k0 = hexc(0x5d7a22), k1 = hexc(0xb7c74a);
+    b.push().m(2).surf(2, 18, (xx, t) => {
+      const w = 0.028 * (0.4 + 0.6 * Math.sin(PI * Math.min(t * 1.4, 1))), q = xx * 2 - 1;
+      return [x + 0.05 * Math.sin(t * 7 + ph) + q * w, y0 + Hh * t, z + 0.04 * Math.cos(t * 5 + ph) + q * w * 0.4];
+    }, { col: (xx, t) => vlerp(k0, k1, t), w: (xx, t) => 1 + t * 1.6 }).pop();
+  }
+}
+
+// one streamed chunk of an infinite sea; geometry is local to the chunk corner (x0, z0)
+function buildChunk(d, node) {
+  const b = new MB(); b.node = node; _seed = d.seed % 2147483646 + 1;
+  const H = (x, z) => terrainFn(x + d.x0, z + d.z0), L = (x, z) => [x - d.x0, z - d.z0];
+  const rocks = [];
+  for (const I of d.islets) {
+    const [ix, iz] = L(I.x, I.z);
+    for (let k = Math.max(1, Math.round(I.r * 2.4)); k--;) {
+      const a = rnd() * TAU, r = rr(0, I.r * 0.45), x = ix + Math.cos(a) * r, z = iz + Math.sin(a) * r;
+      b.push().t(x, H(x, z) - 0.02, z); buildPalm(b, { x, z, h: rr(0.6, 1.0), lean: [rr(-0.3, 0.3), rr(-0.3, 0.3)] }, d.seed % 997 + k, node); b.pop();
+    }
+    b.node = node;
+    for (let k = Math.round(I.r * 5); k--;) {
+      const a = rnd() * TAU, r = rr(I.r * 0.75, I.r * 1.05), x = ix + Math.cos(a) * r, z = iz + Math.sin(a) * r, rs = rr(0.05, 0.12);
+      b.push().t(x, H(x, z) + rs * 0.2, z).ry(rnd() * TAU); rock(b, rs, rnd() * 50); b.pop();
+    }
+    for (let k = Math.round(I.r * 3); k--;) {
+      const a = rnd() * TAU, r = rr(0, I.r * 0.5), x = ix + Math.cos(a) * r, z = iz + Math.sin(a) * r, rs = rr(0.07, 0.13);
+      b.push().m(7).c(vscale(hexc([0x2f9a48, 0x48b85a, 0x1f7d3f][k % 3]), rr(0.85, 1.15))).t(x, H(x, z) + rs * 0.5, z).sphere(rs, rs * 0.85, rs, 12, 8).pop();
+      const fc = [0xff6fa8, 0xffd23f, 0xff4b3a][k % 3];
+      b.push().m(7).c(hexc(fc)).t(x + rr(-0.06, 0.06), H(x, z) + rs * 1.2, z + rr(-0.06, 0.06)).sphere(0.016, 0.011, 0.016, 6, 4).pop();
+    }
+  }
+  for (const t of d.stacks) {   // sea stacks: weathered pillars poking out of the jelly
+    const [x, z] = L(t.x, t.z), g = H(x, z), top = WL + t.h, hh = (top - g) / 2, sd = rnd() * 40;
+    b.push().c(vscale(COL.rock, rr(0.8, 1.05))).t(x, g + hh, z).ry(rnd() * TAU)
+      .sphere(t.r, hh, t.r * 0.85, 10, 9, p => 0.22 * noise3(p[0] * 2.4 + sd, p[1] * 3.5, p[2] * 2.4) - 0.12 * p[1]).pop();
+    b.push().m(7).c(hexc(0x4f8f36)).t(x, top - 0.02, z).sphere(t.r * 0.55, 0.05, t.r * 0.5, 8, 5).pop();
+    rocks.push([t.x, t.z, t.r * 1.15]);
+  }
+  if (d.wreck) { const [x, z] = L(d.wreck.x, d.wreck.z); buildWreck(b, x, z, d.wreck.yaw, H); }
+  for (let k = d.kelp; k--;) { const x = rr(0.3, CHUNK - 0.3), z = rr(0.3, CHUNK - 0.3); if (H(x, z) < WL - 0.3) buildKelp(b, x, z, H); }
+  for (let k = d.coins; k--;) { const x = rr(0.3, CHUNK - 0.3), z = rr(0.3, CHUNK - 0.3); if (H(x, z) < WL - 0.1) { b.push().t(x, H(x, z) + 0.004, z).rx(rr(-0.15, 0.15)); coinGeo(b, 0.035); b.pop(); } }
+  for (let k = d.bubbles; k--;) {
+    const x = rr(0.2, CHUNK - 0.2), z = rr(0.2, CHUNK - 0.2), g = H(x, z); if (g > WL - 0.15) continue;
+    const r = rr(0.006, 0.026); b.push().m(9).c([0.9, 0.97, 1]).t(x, rr(g + 0.05, WL - 0.06), z).sphere(r, r, r, 8, 6).pop();
+  }
+  return { V: new Float32Array(b.V), I: new Uint32Array(b.I), rocks };
+}
+
+function buildSeabed(b, info) {
+  b.node = 0;
+  _seed = 777 + (Math.floor(FLORA.seed) % 1000);
+  // wreck — fore half of a ship on her side
+  const [wx, wz] = LAYOUT.wreck, wy = T0(wx, wz);
+  buildWreck(b, wx, wz, -0.6, T0);
   info.wreck = [{ c: [wx, wy + 0.15, wz], r: 0.3 }, { c: [wx - 0.25, wy + 0.12, wz - 0.2], r: 0.22 }, { c: [wx + 0.25, wy + 0.12, wz + 0.2], r: 0.22 }];
   // kelp
   const kelpSpots = [[1.9, 0.3], [0.55, 1.95], [-1.65, 1.6], [2.05, 1.85], [-2.1, 0.4], [1.0, 0.25], [-0.9, 1.9], [2.2, -0.4]].slice(0, FLORA.kelpClumps);
   for (let g = 0; kelpSpots.length < FLORA.kelpClumps && g < 5000; g++) { const x = rr(-HALF + 0.3, HALF - 0.3), z = rr(-HALF + 0.3, HALF - 0.3); if (T0(x, z) < WL - 0.3) kelpSpots.push([x, z]); }
-  for (const [kx, kz] of kelpSpots) for (let s = 0; s < 4; s++) {
-    const x = kx + rr(-0.12, 0.12), z = kz + rr(-0.12, 0.12), y0 = T0(x, z), H = (WL - 0.1 - y0) * rr(0.6, 0.95), ph = rnd() * 6;
-    if (H < 0.1) continue;
-    const k0 = hexc(0x5d7a22), k1 = hexc(0xb7c74a);
-    b.push().m(2).surf(2, 18, (xx, t) => {
-      const w = 0.028 * (0.4 + 0.6 * Math.sin(PI * Math.min(t * 1.4, 1))), q = xx * 2 - 1;
-      return [x + 0.05 * Math.sin(t * 7 + ph) + q * w, y0 + H * t, z + 0.04 * Math.cos(t * 5 + ph) + q * w * 0.4];
-    }, { col: (xx, t) => vlerp(k0, k1, t), w: (xx, t) => 1 + t * 1.6 }).pop();
-  }
+  for (const [kx, kz] of kelpSpots) buildKelp(b, kx, kz, T0);
   // doubloons on the floor
   for (let i = 0; i < FLORA.seabedCoins; i++) {
     const x = wx + rr(-0.6, 0.4), z = wz + rr(-0.5, 0.45), y = T0(x, z);
@@ -1426,7 +1504,7 @@ struct Uni {
   cam: vec4f, sun: vec4f, sunCol: vec4f, skyTop: vec4f, skyBot: vec4f, amb: vec4f,
   fire: vec4f, fireCol: vec4f, jAbs: vec4f, jCol: vec4f, deform: vec4f, misc: vec4f, misc2: vec4f,
   grid: vec4f, moon: vec4f, bg: vec4f, camR: vec4f, camU: vec4f, lamp: vec4f, misc3: vec4f,
-  world: vec4f, swell: vec4f,   // world: half, terrain N, size, terrain dx · swell: amp, wavelength, speed, window fade cells
+  world: vec4f, swell: vec4f, center: vec4f,   // center: block centre xz (sim coords)   // world: half, terrain N, size, terrain dx · swell: amp, wavelength, speed, window fade cells
 };
 struct Node { m: mat4x4f, p: vec4f };
 @group(0) @binding(0) var<uniform> U: Uni;
@@ -1441,11 +1519,13 @@ fn vnoise(p: vec2f) -> f32 {
   return mix(mix(hash21(i), hash21(i + vec2f(1.0, 0.0)), u.x), mix(hash21(i + vec2f(0.0, 1.0)), hash21(i + vec2f(1.0, 1.0)), u.x), u.y);
 }
 fn fbm(p0: vec2f) -> f32 { var p = p0; var s = 0.0; var a = 0.5; for (var i = 0; i < 4; i++) { s += a * vnoise(p); p = p * 2.03 + vec2f(1.7, -3.1); a *= 0.5; } return s; }
-fn deformP(p: vec3f) -> vec3f {
+fn deformP(p0: vec3f) -> vec3f {
+  let c = vec3f(U.center.x, 0.0, U.center.y); let p = p0 - c;
   let h = clamp(p.y / U.deform.w, 0.0, 1.8);
   let sq = U.deform.z;
-  return vec3f(p.x * (1.0 + sq * 0.5) + U.deform.x * h, p.y * (1.0 - sq), p.z * (1.0 + sq * 0.5) + U.deform.y * h);
+  return c + vec3f(p.x * (1.0 + sq * 0.5) + U.deform.x * h, p.y * (1.0 - sq), p.z * (1.0 + sq * 0.5) + U.deform.y * h);
 }
+fn outside(lp: vec3f) -> bool { let q = abs(lp.xz - U.center.xy); return max(q.x, q.y) > U.world.x; }
 fn toWorld(lp: vec3f) -> vec3f { return (U.block * vec4f(deformP(lp), 1.0)).xyz; }
 fn wLoad(i: vec2i) -> vec4f { let n = i32(U.grid.x) - 1; return textureLoad(hf, clamp(i, vec2i(0), vec2i(n)), 0); }
 fn waterRaw(xz: vec2f) -> vec2f {
@@ -1466,7 +1546,7 @@ fn etaAt(xz: vec2f) -> f32 { return waterRaw(xz).x + swellAt(xz); }
 fn foamAt(xz: vec2f) -> f32 { return waterRaw(xz).y; }
 fn tLoad(i: vec2i) -> f32 { let n = i32(U.world.y) - 1; return textureLoad(terrTex, clamp(i, vec2i(0), vec2i(n)), 0).x; }
 fn terrAt(xz: vec2f) -> f32 {
-  let g = (xz + U.world.x) / U.world.w - 0.5;
+  let g = (xz - U.center.xy + U.world.x) / U.world.w - 0.5;
   let f0 = floor(g); let f = g - f0; let i = vec2i(f0);
   return mix(mix(tLoad(i), tLoad(i + vec2i(1, 0)), f.x), mix(tLoad(i + vec2i(0, 1)), tLoad(i + vec2i(1, 1)), f.x), f.y);
 }
@@ -1594,7 +1674,9 @@ fn nodeXform(v: VIn) -> VOut {
   o.clip = U.viewProj * vec4f(o.wp, 1.0);
   return o;
 }
-@vertex fn vsShadow(v: VIn) -> @builtin(position) vec4f { let o = nodeXform(v); return U.lightVP * vec4f(o.wp, 1.0); }
+struct SOut { @builtin(position) clip: vec4f, @location(0) lp: vec3f };
+@vertex fn vsShadow(v: VIn) -> SOut { let o = nodeXform(v); var r: SOut; r.clip = U.lightVP * vec4f(o.wp, 1.0); r.lp = o.lp; return r; }
+@fragment fn fsShadow(i: SOut) { if (outside(i.lp)) { discard; } }
 `;
 const WGSL_NODES_MAIN = WGSL_NODES + WGSL_SHADOW_BIND + `
 @vertex fn vs(v: VIn) -> VOut { return nodeXform(v); }
@@ -1625,6 +1707,7 @@ fn flagCol(uv: vec2f) -> vec3f {
   return c;
 }
 @fragment fn fs(i: VOut, @builtin(front_facing) ff: bool) -> @location(0) vec4f {
+  if (outside(i.lp)) { discard; }                        // the block is a cut-away: nothing outside it
   let mat = i32(i.mat + 0.5);
   var n = normalize(i.n); if (!ff) { n = -n; }
   var alb = i.col;
@@ -1645,7 +1728,7 @@ fn sideN(s: f32) -> vec3f {
   if (k == 2) { return vec3f(0.0, 0.0, 1.0); } return vec3f(0.0, 0.0, -1.0);
 }
 fn terrXform(v: vec4f) -> VOut {
-  let xz = v.xy; let kind = v.z;
+  let xz = v.xy + U.center.xy; let kind = v.z;
   let h = terrAt(xz);
   var lp = vec3f(xz.x, h, xz.y); var ln = vec3f(0.0, 1.0, 0.0);
   if (kind < 0.5) {
@@ -1773,7 +1856,7 @@ fn boxHit(ro: vec3f, rd: vec3f, bmin: vec3f, bmax: vec3f) -> vec2f {
   let lp = (U.invBlock * vec4f(wp, 1.0)).xyz;
   // light through the jelly block: tint + caustics
   let ld = normalize((U.invBlock * vec4f(U.sun.xyz, 0.0)).xyz);
-  let hit = boxHit(lp, ld, vec3f(-U.world.x, 0.0, -U.world.x), vec3f(U.world.x, U.jAbs.w, U.world.x));
+  let hit = boxHit(lp, ld, vec3f(U.center.x - U.world.x, 0.0, U.center.y - U.world.x), vec3f(U.center.x + U.world.x, U.jAbs.w, U.center.y + U.world.x));
   var sunC = U.sunCol.rgb * U.sun.w;
   let sh = mix(1.0, shadowF(wp, n), U.sunCol.w);
   if (hit.y > max(hit.x, 0.0)) {
@@ -1785,7 +1868,7 @@ fn boxHit(ro: vec3f, rd: vec3f, bmin: vec3f, bmax: vec3f) -> vec2f {
   var col = alb * sunC * max(n.y * U.sun.y, 0.0) * sh;
   col += alb * vec3f(0.55, 0.65, 1.0) * U.moon.w * 0.05;
   // contact shadow around the block foot
-  let q = abs(lp.xz) - vec2f(U.world.x);
+  let q = abs(lp.xz - U.center.xy) - vec2f(U.world.x);
   let dd = length(max(q, vec2f(0.0))) + min(max(q.x, q.y), 0.0);
   let ao = 1.0 - 0.5 * exp(-max(dd, 0.0) * 5.0);
   col += alb * U.amb.rgb * ao;
@@ -1809,7 +1892,7 @@ fn sideN(s: f32) -> vec3f {
   if (k == 2) { return vec3f(0.0, 0.0, 1.0); } return vec3f(0.0, 0.0, -1.0);
 }
 @vertex fn vs(@location(0) v: vec4f) -> JOut {
-  let xz = v.xy; let kind = v.z;
+  let xz = v.xy + U.center.xy; let kind = v.z;
   var lp = vec3f(xz.x, U.jAbs.w + etaAt(xz), xz.y); var ln = vec3f(0.0, 1.0, 0.0);
   if (kind < 0.5) {
     let d = U.grid.y;
@@ -1881,7 +1964,7 @@ fn proj(p: vec3f) -> vec2f { let c = U.viewProj * vec4f(p, 1.0); return vec2f(c.
     col = mix(col, vec3f(0.98, 0.98, 0.95) * (U.amb.rgb * 1.2 + sunC * 0.7 + U.fireCol.rgb * U.fire.w * 0.1), foam * 0.85);
   }
   // bright crescent rims on the cut edges
-  let e = vec2f(U.world.x) - abs(i.lp.xz);
+  let e = vec2f(U.world.x) - abs(i.lp.xz - U.center.xy);
   var rim = 0.0;
   if (isTop) { rim = exp(-min(e.x, e.y) * 55.0); }
   else {
@@ -1971,21 +2054,40 @@ function sampGrid(a, N, dx, ox, oz, x, z) {
   return lerp(lerp(c(i0, j0), c(i0 + 1, j0), fx), lerp(c(i0, j0 + 1), c(i0 + 1, j0 + 1), fx), fz);
 }
 class Terrain {
+  // TN×TN heights covering the jelly block (centre BC); in infinite worlds it scrolls with the block
   constructor() { this.load(); }
+  gen(x, z) { return terrainFn(x + ORIGIN[0], z + ORIGIN[1]); }
   load() {
-    this.N = TN; this.dx = TDX; this.h0 = new Float32Array(TN * TN);
-    for (let j = 0; j < TN; j++) for (let i = 0; i < TN; i++) this.h0[j * TN + i] = terrainFn(-HALF + (i + 0.5) * TDX, -HALF + (j + 0.5) * TDX);
-    this.h = this.h0.slice(); this.dirty = true;
+    this.N = TN; this.dx = TDX; this.ox = BC[0] - HALF; this.oz = BC[1] - HALF;
+    this.h = new Float32Array(TN * TN);
+    for (let j = 0; j < TN; j++) for (let i = 0; i < TN; i++) this.h[j * TN + i] = this.gen(this.ox + (i + 0.5) * TDX, this.oz + (j + 0.5) * TDX);
+    this.dirty = true;
   }
-  reset() { this.h.set(this.h0); this.dirty = true; }
-  at(x, z) { return sampGrid(this.h, this.N, this.dx, -HALF, -HALF, x, z); }
+  reset() { this.load(); }
+  // re-centre on the block: shift by whole cells and generate only the newly exposed strips
+  follow() {
+    const N = this.N, dx = this.dx, ki = Math.round((BC[0] - HALF - this.ox) / dx), kj = Math.round((BC[1] - HALF - this.oz) / dx);
+    if (!ki && !kj) return;
+    if (Math.abs(ki) >= N || Math.abs(kj) >= N) { this.load(); return; }
+    const o = new Float32Array(N * N), nox = this.ox + ki * dx, noz = this.oz + kj * dx;
+    for (let j = 0; j < N; j++) {
+      const sj = j + kj, inJ = sj >= 0 && sj < N;
+      for (let i = 0; i < N; i++) {
+        const si = i + ki;
+        o[j * N + i] = inJ && si >= 0 && si < N ? this.h[sj * N + si] : this.gen(nox + (i + 0.5) * dx, noz + (j + 0.5) * dx);
+      }
+    }
+    this.h = o; this.ox = nox; this.oz = noz; this.dirty = true;
+  }
+  at(x, z) { return sampGrid(this.h, this.N, this.dx, this.ox, this.oz, x, z); }
   normal(x, z) { const e = this.dx; return vnorm([this.at(x - e, z) - this.at(x + e, z), 2 * e, this.at(x, z - e) - this.at(x, z + e)]); }
   crater(x, z, r, depth) {
-    splatGrid(this.h, this.N, this.dx, -HALF, -HALF, x, z, r, -depth);
-    splatGrid(this.h, this.N, this.dx, -HALF, -HALF, x, z, r * 1.8, depth * 0.25);
+    splatGrid(this.h, this.N, this.dx, this.ox, this.oz, x, z, r, -depth);
+    splatGrid(this.h, this.N, this.dx, this.ox, this.oz, x, z, r * 1.8, depth * 0.25);
     this.dirty = true;
   }
 }
+const inBlock = (x, z, m = 0) => Math.abs(x - BC[0]) < HALF - m && Math.abs(z - BC[1]) < HALF - m;
 
 // ───────────────────────── shallow water (staggered grid, CPU) ─────────────────────────
 // Simulated in a window of GN×GN cells. When the window is smaller than the block it follows
@@ -2012,7 +2114,7 @@ class Water {
     const N = this.N, D = this.D = new Float32Array(N * N), wet = this.wet = new Uint8Array(N * N);
     for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
       const x = this.ox + (i + 0.5) * this.dx, z = this.oz + (j + 0.5) * this.dx, k = j * N + i;
-      const inside = Math.abs(x) < HALF && Math.abs(z) < HALF;
+      const inside = inBlock(x, z);
       D[k] = inside ? Math.max(WL - this.terrain.at(x, z), 0) : 0; wet[k] = D[k] > 0.012 ? 1 : 0;
     }
   }
@@ -2141,7 +2243,7 @@ class Particles {
       a.vy[i] = a.vy[i] * kd - a.grav[i] * dt;
       a.x[i] += a.vx[i] * dt; a.y[i] += a.vy[i] * dt; a.z[i] += a.vz[i] * dt; a.rot[i] += a.rotv[i] * dt;
       if (a.buoy[i] && a.y[i] > water.height(a.x[i], a.z[i]) - 0.01) { this.kill(i); i--; continue; }
-      if (a.grav[i] > 0 && !a.under[i] && Math.abs(a.x[i]) < HALF && Math.abs(a.z[i]) < HALF && a.y[i] < water.ground(a.x[i], a.z[i])) { this.kill(i); i--; continue; }
+      if (a.grav[i] > 0 && !a.under[i] && inBlock(a.x[i], a.z[i]) && a.y[i] < water.ground(a.x[i], a.z[i])) { this.kill(i); i--; continue; }
     }
   }
   // pack into [under-alpha | alpha | additive]; returns counts
@@ -2224,8 +2326,8 @@ class Ship {
       const vp = vadd(this.vel, vcross(this.w, vsub(p, this.pos))), vn = vdot(vp, h);
       force(vscale(h, pen * 60 - Math.min(vn, 0) * 6), [p[0], this.pos[1], p[2]]);
     }
-    if (this.rock) {   // Skull Rock as a round pillar
-      const [rx, rz, rr2] = this.rock;
+    for (const [rx, rz, rr2] of this.rocks || []) {   // Skull Rock and sea stacks as round pillars
+      if (Math.abs(rx - this.pos[0]) > 2 || Math.abs(rz - this.pos[2]) > 2) continue;
       for (const lp of SHIP_PROBES) {
         const p = this.toWorld(lp), dx = p[0] - rx, dz = p[2] - rz, d = Math.hypot(dx, dz);
         if (d < rr2 && d > 1e-4) { const h = [dx / d, 0, dz / d], vn = vdot(this.vel, h); force(vscale(h, (rr2 - d) * 60 - Math.min(vn, 0) * 6), [p[0], this.pos[1], p[2]]); }
@@ -2269,7 +2371,7 @@ class Ship {
       force([dd[0] * 7 - vg[0] * 1.5, 0, dd[2] * 7 - vg[2] * 1.5], [gp[0], this.pos[1], gp[2]]);
     }
     // stay inside the jelly
-    for (const c of [0, 2]) {
+    if (!INFINITE) for (const c of [0, 2]) {
       const lim = HALF - 0.45, o = this.pos[c];
       if (Math.abs(o) > lim) F[c] -= (o - Math.sign(o) * lim) * 20 + this.vel[c] * 2;
     }
@@ -2374,7 +2476,7 @@ async function main() {
   const buf = (data, usage) => { const b = device.createBuffer({ size: Math.max(16, data.byteLength + 3 & ~3), usage: usage | GPUBufferUsage.COPY_DST }); device.queue.writeBuffer(b, 0, data); return b; };
   let nodeVB = buf(world.V, GPUBufferUsage.VERTEX), nodeIB = buf(world.I, GPUBufferUsage.INDEX);
   let gridVB = buf(grid.V, GPUBufferUsage.VERTEX), gridIB = buf(grid.I, GPUBufferUsage.INDEX);
-  const UF = new Float32Array(168);
+  const UF = new Float32Array(172);
   const uniBuf = device.createBuffer({ size: UF.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   const nodeF = new Float32Array(NODE_COUNT * 20);
   const nodeBuf = device.createBuffer({ size: nodeF.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
@@ -2437,7 +2539,7 @@ async function main() {
   const depthW = { format: DEPTH, depthWriteEnabled: true, depthCompare: 'less' };
   const shadowDS = { format: DEPTH, depthWriteEnabled: true, depthCompare: 'less', depthBias: 3, depthBiasSlopeScale: 2.5 };
   const P = (o) => device.createRenderPipeline(o);
-  const pNodeSh = P({ layout: L0, vertex: { module: mNodesSh, entryPoint: 'vsShadow', buffers: nodeLayout }, primitive: { cullMode: 'none' }, depthStencil: shadowDS });
+  const pNodeSh = P({ layout: L0, vertex: { module: mNodesSh, entryPoint: 'vsShadow', buffers: nodeLayout }, fragment: { module: mNodesSh, entryPoint: 'fsShadow', targets: [] }, primitive: { cullMode: 'none' }, depthStencil: shadowDS });
   const pTerrSh = P({ layout: L0, vertex: { module: mTerrSh, entryPoint: 'vsShadow', buffers: gridLayout }, primitive: { cullMode: 'none' }, depthStencil: shadowDS });
   const tgtHDR = [{ format: HDR }];
   const pBg = P({ layout: L1, vertex: { module: mBg, entryPoint: 'vsBg' }, fragment: { module: mBg, entryPoint: 'fsBg', targets: tgtHDR }, depthStencil: { format: DEPTH, depthWriteEnabled: false, depthCompare: 'always' } });
@@ -2493,7 +2595,7 @@ async function main() {
     const [tx, tz] = S.tilt;
     const lift = HALF * (Math.abs(Math.sin(tx)) + Math.abs(Math.sin(tz)));
     const R = M4.mul(M4.RX(tx), M4.RZ(tz));
-    blockM = M4.mul(M4.T(0, lift, 0), R);
+    blockM = M4.mul(M4.mul(M4.T(0, lift, 0), R), M4.T(-BC[0], 0, -BC[1]));
     invBlockM = M4.inv(blockM);
     gLocal = M4.xv(M4.inv(R), [0, -G_BODY, 0]);
   }
@@ -2541,7 +2643,7 @@ async function main() {
     const b = freeBody('barrel'); b.spawn([rr(-1.2, 2.0), WL + 0.9, rr(0.2, 2.1)], [0, 0, 0]); b.w = [rr(-2, 2), rr(-2, 2), 0];
   }
   function popX() {
-    const [x, z] = LAYOUT.xmark, y = water.ground(x, z);
+    const x = LAYOUT.xmark[0] - ORIGIN[0], z = LAYOUT.xmark[1] - ORIGIN[1], y = water.ground(x, z);
     dropCoins(3, [x, y, z]);
     for (let i = 0; i < 26; i++) parts.emit({ p: [x + rr(-.05, .05), y + 0.02, z + rr(-.05, .05)], v: [rr(-.7, .7), rr(1, 2.2), rr(-.7, .7)], life: rr(0.5, 1), s0: rr(0.012, 0.025), s1: 0.03, c0: [0.92, 0.8, 0.58, 0.9], kind: 0, grav: 5, drag: 0.6 });
   }
@@ -2550,6 +2652,7 @@ async function main() {
     for (let i = 0; i < 50; i++) parts.emit({ p: vadd(info.fire, [rr(-.05, .05), 0, rr(-.05, .05)]), v: [rr(-.6, .6), rr(1.2, 2.8), rr(-.6, .6)], life: rr(0.8, 1.8), s0: rr(0.008, 0.016), s1: 0.004, c0: [3, 1.6, 0.4, 1], c1: [2, 0.4, 0.05, 0.8], kind: 1, add: 1, drag: 1.2, grav: 1.2 });
   }
   function resetAll() {
+    if (ORIGIN[0] || ORIGIN[1] || BC[0] || BC[1]) { hooks.onRebuild(CFG()); return; }
     terrain.reset(); water.reset(); ship.reset(); for (const b of bodies) b.alive = false; parts.n = 0;
     if (VOY()) camHome();
     chest.ang = chest.vel = chest.target = 0; chest.open = false; S.shots = 0; S.tilt = [0, 0]; S.tiltV = [0, 0];
@@ -2613,7 +2716,7 @@ async function main() {
       b.contact = true; b.cn = n;
     }
     // walls of the block
-    for (const c of [0, 2]) if (Math.abs(b.p[c]) > HALF - b.r) { b.p[c] = Math.sign(b.p[c]) * (HALF - b.r); if (b.v[c] * Math.sign(b.p[c]) > 0) { b.v[c] *= -0.35; S.shearV[c ? 1 : 0] += b.v[c] * 0.02; } }
+    for (const c of [0, 2]) { const o = BC[c >> 1], d = b.p[c] - o; if (Math.abs(d) > HALF - b.r) { b.p[c] = o + Math.sign(d) * (HALF - b.r); if (b.v[c] * Math.sign(d) > 0) { b.v[c] *= -0.35; S.shearV[c ? 1 : 0] += b.v[c] * 0.02; } } }
     if (b.p[1] < b.r) { b.p[1] = b.r; b.v[1] = Math.abs(b.v[1]) * 0.2; }
     // skull rock (SDF)
     { const [sx, sy, sz] = info.skull.p, yaw = info.skull.yaw, c = Math.cos(-yaw), s = Math.sin(-yaw);
@@ -2706,9 +2809,14 @@ async function main() {
     const V = CFG().voyage;
     ship.anchored = !VOY();
     ship.control = VOY() ? { thrust: (keys.up ? 1 : 0) - (keys.down ? 1 : 0), turn: (keys.left ? 1 : 0) - (keys.right ? 1 : 0), power: V.thrust, reverse: V.reverse, rudder: V.turn } : null;
-    ship.rock = [info.skull.p[0], info.skull.p[2], 0.62 * info.skull.s];
+    ship.rocks = [[info.skull.p[0], info.skull.p[2], 0.62 * info.skull.s], ...chunkRocks()];
     ship.step(dt, water, gLocal, S.wind, info.anchorRing);
     water.follow(ship.pos[0], ship.pos[2]);
+    if (INFINITE) {   // the block travels with the ship
+      const nx = Math.round(ship.pos[0] / TDX) * TDX, nz = Math.round(ship.pos[2] / TDX) * TDX;
+      if (nx !== BC[0] || nz !== BC[1]) { BC[0] = nx; BC[1] = nz; terrain.follow(); }
+      if (Math.hypot(BC[0], BC[1]) > 512) rebase();
+    }
     for (const b of bodies) stepBody(b, dt);
     collideBodies();
     const tension = lerp(Wv.tensionSoft, Wv.tensionFirm, S.firm);
@@ -2755,11 +2863,49 @@ async function main() {
     }
   }
 
+  // ── streamed chunks (infinite worlds) ──
+  const chunks = new Map(), freeNodes = [];
+  for (let i = NODE.NCHUNK; i--;) freeNodes.push(NODE.CHUNK + i);
+  const chunkRocks = () => { const out = []; for (const c of chunks.values()) for (const r of c.rocks) out.push([r[0] - ORIGIN[0], r[1] - ORIGIN[1], r[2]]); return out; };
+  function dropChunk(key) { const c = chunks.get(key); c.vb.destroy(); c.ib.destroy(); freeNodes.push(c.node); nodeF.fill(0, c.node * 20, c.node * 20 + 20); chunks.delete(key); }
+  function dropAllChunks() { for (const k of [...chunks.keys()]) dropChunk(k); }
+  function streamChunks(budgetMs) {
+    if (!INFINITE) { if (chunks.size) dropAllChunks(); return; }
+    const gx = BC[0] + ORIGIN[0], gz = BC[1] + ORIGIN[1], R = HALF + 1;
+    const ci0 = Math.floor((gx - R) / CHUNK), ci1 = Math.floor((gx + R) / CHUNK), cj0 = Math.floor((gz - R) / CHUNK), cj1 = Math.floor((gz + R) / CHUNK);
+    const want = [];
+    for (let i = ci0; i <= ci1; i++) for (let j = cj0; j <= cj1; j++) want.push([i, j, Math.hypot((i + 0.5) * CHUNK - gx, (j + 0.5) * CHUNK - gz)]);
+    const keep = new Set(want.map(([i, j]) => i * 100003 + j));
+    for (const k of [...chunks.keys()]) if (!keep.has(k)) dropChunk(k);
+    want.sort((a, b) => a[2] - b[2]);
+    const t0 = performance.now();
+    for (const [i, j] of want) {
+      const key = i * 100003 + j; if (chunks.has(key) || !freeNodes.length) continue;
+      const d = chunkDesc(i, j), node = freeNodes.pop(), g = buildChunk(d, node);
+      chunks.set(key, { node, x0: d.x0, z0: d.z0, count: g.I.length, vb: buf(g.V.length ? g.V : new Float32Array(12), GPUBufferUsage.VERTEX), ib: buf(g.I.length ? g.I : new Uint32Array(3), GPUBufferUsage.INDEX), rocks: g.rocks });
+      if (performance.now() - t0 > budgetMs) break;
+    }
+  }
+  function drawChunks(p) { for (const c of chunks.values()) if (c.count) { p.setVertexBuffer(0, c.vb); p.setIndexBuffer(c.ib, 'uint32'); p.drawIndexed(c.count); } }
+  // floating origin: keep simulation coordinates small however far she sails
+  function rebase() {
+    const q = TDX * 64, dx = Math.round(BC[0] / q) * q, dz = Math.round(BC[1] / q) * q;
+    ORIGIN[0] += dx; ORIGIN[1] += dz;
+    const sh = p => { if (p) { p[0] -= dx; p[2] -= dz; } };
+    sh(ship.pos); for (const b of bodies) if (b.alive) sh(b.p);
+    for (let i = 0; i < parts.n; i++) { parts.a.x[i] -= dx; parts.a.z[i] -= dz; }
+    BC[0] -= dx; BC[1] -= dz; terrain.ox -= dx; terrain.oz -= dz; water.ox -= dx; water.oz -= dz;
+    new Set([info.fire, info.chest.p, info.anchorRing, info.skull.p, ...info.skullEyes, ...info.bushes, ...statics.map(s => s.c)]).forEach(sh);
+    for (const p of palms) sh(p.base);
+    if (ptrWater) { ptrWater[0] -= dx; ptrWater[1] -= dz; }
+  }
+
   // ── uniforms & node matrices ──
   function updateNodes() {
     const put = (i, m, p = [0, 0, 0, 0]) => { nodeF.set(m, i * 20); nodeF.set(p, i * 20 + 16); };
     const zero = new Float32Array(16);
-    put(0, M4.id());
+    put(0, M4.T(-ORIGIN[0], 0, -ORIGIN[1]));
+    for (const ch of chunks.values()) put(ch.node, M4.T(ch.x0 - ORIGIN[0], 0, ch.z0 - ORIGIN[1]));
     put(NODE.SHIP, Q.mat(ship.q, ship.pos));
     const c = info.chest;
     put(NODE.LID, M4.mul(M4.mul(M4.mul(M4.T(c.p[0], c.p[1], c.p[2]), M4.RY(c.yaw)), M4.T(0, c.h, -c.d / 2)), M4.RX(-chest.ang)));
@@ -2793,7 +2939,7 @@ async function main() {
     v4(fl.abs[0], fl.abs[1], fl.abs[2], WL);
     v4(fl.col[0], fl.col[1], fl.col[2], 0.9);
     v4(S.shear[0], S.shear[1], S.squash, WL + 0.3);
-    v4(D.night, D.stars, LAYOUT.xmark[0], LAYOUT.xmark[1]);
+    v4(D.night, D.stars, LAYOUT.xmark[0] - ORIGIN[0], LAYOUT.xmark[1] - ORIGIN[1]);
     v4(W, H, S.wind[0] * 3, S.wind[1] * 3 * (REDUCED ? 0.4 : 1));
     v4(GN, GDX, water.ox, water.oz);
     v4(moonDir[0], moonDir[1], moonDir[2], D.moon);
@@ -2804,6 +2950,7 @@ async function main() {
     v4(D.glow, 0, 0, 0);
     v4(HALF, TN, BLOCK, TDX);
     v4(SWELL.amp, SWELL.length, SWELL.speed, SWELL.fade);
+    v4(BC[0], BC[1], 0, 0);
     device.queue.writeBuffer(uniBuf, 0, UF);
   }
 
@@ -2826,8 +2973,8 @@ async function main() {
     const cand = (t, kind, extra) => { if (t < best.t) best = { t, kind, ...extra }; };
     // terrain blocker (ray march)
     let tTerr = Infinity;
-    { const bx = rayBox(ro, rd, [-HALF, 0, -HALF], [HALF, 3, HALF]); let t = bx ? bx.t : 0;
-      for (let i = 0; i < 260 && t < 30; i++) { const p = vmad(ro, rd, t); if (Math.abs(p[0]) > HALF + 0.01 || Math.abs(p[2]) > HALF + 0.01) { if (i > 3) break; } else if (p[1] < water.ground(p[0], p[2])) { tTerr = t; break; } t += 0.02; } }
+    { const bx = rayBox(ro, rd, [BC[0] - HALF, 0, BC[1] - HALF], [BC[0] + HALF, 3, BC[1] + HALF]); let t = bx ? bx.t : 0;
+      for (let i = 0; i < 700 && t < 40; i++) { const p = vmad(ro, rd, t); if (!inBlock(p[0], p[2], -0.01)) { if (i > 3) break; } else if (p[1] < water.ground(p[0], p[2])) { tTerr = t; break; } t += 0.02; } }
     for (const b of bodies) if (b.alive) cand(raySphere(ro, rd, b.p, b.r * 1.8 + 0.02), 'body', { body: b });
     { const lr = Q.rot(Q.conj(ship.q), rd), lo = ship.toLocal(ro);
       const h1 = rayBox(lo, lr, [-0.27, -0.2, -0.82], [0.27, 0.4, 0.85]), h2 = rayBox(lo, lr, [-0.38, 0.4, -0.6], [0.38, 1.7, 0.6]);
@@ -2839,7 +2986,7 @@ async function main() {
       for (let k = 0; k <= 5; k++) cand(raySphere(ro, rd, vadd(p.base, vadd(palmPath(p, k / 5), vscale(p.bend, (k / 5) ** 2))), k === 5 ? 0.24 : 0.07), 'palm', { palm: p });
     });
     // water surface / block sides
-    const top = rayBox(ro, rd, [-HALF, 0, -HALF], [HALF, WL, HALF]);
+    const top = rayBox(ro, rd, [BC[0] - HALF, 0, BC[1] - HALF], [BC[0] + HALF, WL, BC[1] + HALF]);
     if (top) {
       if (top.face === 1) { const p = vmad(ro, rd, top.t); if (water.ground(p[0], p[2]) < WL) cand(top.t, 'water', { hp: p }); }
       else if (!VOY()) cand(top.t, 'tilt', { hp: vmad(ro, rd, top.t) });
@@ -2924,11 +3071,11 @@ async function main() {
       case 'orbit': orbit(dx, dy); break;
       case 'body': {
         const n = vnorm(M4.xv(invBlockM, camF)), hp = planeHit(ro, rd, act.plane, n);
-        if (hp) { hp[0] = clamp(hp[0], -HALF + 0.1, HALF - 0.1); hp[2] = clamp(hp[2], -HALF + 0.1, HALF - 0.1); hp[1] = Math.max(hp[1], water.ground(hp[0], hp[2]) + act.body.r); act.body.p = hp; }
+        if (hp) { hp[0] = clamp(hp[0], BC[0] - HALF + 0.1, BC[0] + HALF - 0.1); hp[2] = clamp(hp[2], BC[1] - HALF + 0.1, BC[1] + HALF - 0.1); hp[1] = Math.max(hp[1], water.ground(hp[0], hp[2]) + act.body.r); act.body.p = hp; }
         break;
       }
       case 'ship': { const hp = planeHit(ro, rd, [0, WL, 0], [0, 1, 0]); if (hp && act.moved) ship.drag = { local: act.local, target: hp }; break; }
-      case 'water': { const hp = planeHit(ro, rd, [0, WL, 0], [0, 1, 0]); ptrWater = hp && Math.abs(hp[0]) < HALF && Math.abs(hp[2]) < HALF ? [hp[0], hp[2]] : null; break; }
+      case 'water': { const hp = planeHit(ro, rd, [0, WL, 0], [0, 1, 0]); ptrWater = hp && inBlock(hp[0], hp[2]) ? [hp[0], hp[2]] : null; break; }
       case 'tilt': {
         const tx = act.x - act.x0, ty = act.y - act.y0;
         const rx = [camR[0], camR[2]], fz = vnorm([camF[0], 0, camF[2]]);
@@ -2995,6 +3142,7 @@ async function main() {
     },
     onRebuild(c) {
       setWorld(c.world); applySceneConfig(c.scene);
+      ORIGIN[0] = ORIGIN[1] = 0; BC[0] = BC[1] = 0; dropAllChunks();
       makeWorld();
       terrain = new Terrain(); water = new Water(terrain);
       for (const b of [nodeVB, nodeIB, gridVB, gridIB, hfTex, terrTex]) b.destroy();
@@ -3031,6 +3179,7 @@ async function main() {
       if (act && act.kind === 'body') { const b = act.body; act.vel = vlerp(act.vel, vscale(vsub(b.p, act.last), 1 / dt), 0.5); act.last = [...b.p]; }
     } else { parts.step(0, S.wind, water); }
     const E = water.finishFrame(dt);
+    streamChunks(TEST ? 50 : 5);
     computeBlock(); if (VOY()) followCamera(dt); computeCamera();
     updateUniforms(D); updateNodes();
     device.queue.writeTexture({ texture: hfTex }, water.tex, { bytesPerRow: GN * 16 }, [GN, GN]);
@@ -3043,6 +3192,7 @@ async function main() {
     { const p = enc.beginRenderPass({ colorAttachments: [], depthStencilAttachment: { view: shadowTex.createView(), depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' } });
       p.setBindGroup(0, bg0);
       p.setPipeline(pNodeSh); p.setVertexBuffer(0, nodeVB); p.setIndexBuffer(nodeIB, 'uint32'); p.drawIndexed(world.I.length);
+      drawChunks(p);
       p.setPipeline(pTerrSh); p.setVertexBuffer(0, gridVB); p.setIndexBuffer(gridIB, 'uint32'); p.drawIndexed(grid.I.length);
       p.end(); }
     { const p = enc.beginRenderPass({ colorAttachments: [{ view: sceneTex.createView(), clearValue: { r: 0, g: 0, b: 0, a: 1e4 }, loadOp: 'clear', storeOp: 'store' }],
@@ -3052,6 +3202,7 @@ async function main() {
       p.setPipeline(pFloor); p.draw(6);
       p.setPipeline(pTerr); p.setVertexBuffer(0, gridVB); p.setIndexBuffer(gridIB, 'uint32'); p.drawIndexed(grid.I.length);
       p.setPipeline(pNodes); p.setVertexBuffer(0, nodeVB); p.setIndexBuffer(nodeIB, 'uint32'); p.drawIndexed(world.I.length);
+      drawChunks(p);
       if (counts[0]) { p.setPipeline(pPartA); p.setVertexBuffer(0, partBuf); p.draw(4, counts[0], 0, 0); }
       p.end(); }
     enc.copyTextureToTexture({ texture: sceneTex }, { texture: hdr2 }, [W, H]);
@@ -3082,6 +3233,7 @@ async function main() {
       Shell.meter('vigour', vigSm, vigSm < 0.12 ? '平静' : vigSm < 0.35 ? '活跃' : vigSm < 0.65 ? '起伏' : '风暴');
       Shell.count('shots', S.shots); Shell.count('afloat', afloat); Shell.count('sunk', sunk);
       { const sp = vlen([ship.vel[0], 0, ship.vel[2]]); Shell.meter('speed', sp / 1.3, (sp * 8).toFixed(1) + ' 节'); }
+      if (INFINITE) Shell.count('distance', Math.round(Math.hypot(ship.pos[0] + ORIGIN[0] - LAYOUT.ship[0], ship.pos[2] + ORIGIN[1] - LAYOUT.ship[1]) * 10));
       const isDark = D.night > CFG().theme.darkAt;
       if (isDark !== dark) { dark = isDark; Shell.setDark(isDark); }
     }

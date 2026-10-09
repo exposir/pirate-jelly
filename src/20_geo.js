@@ -7,12 +7,41 @@ let TN = 128, TDX = BLOCK / TN;                       // global terrain grid
 let GN = 128, GDX = BLOCK / GN;                       // water simulation window
 const SWELL = { amp: 0, length: 1.6, speed: 1.2, fade: 0 };
 const ISLETS = [];                                    // extra islands for large worlds: { x, z, r, h }
+// infinite worlds: the block follows the ship; content comes from deterministic chunks
+let INFINITE = false;
+const ORIGIN = [0, 0];                                // generator coords = sim coords + ORIGIN (floating origin)
+const BC = [0, 0];                                    // block centre in sim coords
+const CHUNK = 8, HOME_R = 13;                         // chunk size; no generated islets near the home island
+const _chunks = new Map();
+function chunkDesc(ci, cj) {
+  const key = ci * 100003 + cj;
+  let d = _chunks.get(key); if (d) return d;
+  let sd = (Math.abs(Math.floor(hash2(ci * 1.37 + 0.5, cj * 2.11 + 0.25) * 2147483000)) % 2147483000) + 1;
+  const R = () => { sd = (sd * 16807) % 2147483647; return (sd - 1) / 2147483646; };
+  const x0 = ci * CHUNK, z0 = cj * CHUNK, home = (x, z, m) => Math.hypot(x, z) < HOME_R + m;
+  d = { ci, cj, x0, z0, islets: [], stacks: [], wreck: null, kelp: 2 + Math.floor(R() * 5), coins: Math.floor(R() * 4), bubbles: 4 + Math.floor(R() * 8), seed: Math.floor(R() * 1e6) };
+  if (R() < 0.42) { const r = 0.7 + R() * 0.9, x = x0 + 1.6 + R() * (CHUNK - 3.2), z = z0 + 1.6 + R() * (CHUNK - 3.2); if (!home(x, z, r)) d.islets.push({ x, z, r, h: 0.25 + R() * 0.35 }); }
+  for (let n = R() < 0.35 ? 1 + Math.floor(R() * 3) : 0; n--;) { const x = x0 + 0.5 + R() * (CHUNK - 1), z = z0 + 0.5 + R() * (CHUNK - 1); if (!home(x, z, 0.5)) d.stacks.push({ x, z, r: 0.18 + R() * 0.22, h: 0.35 + R() * 0.7 }); }
+  if (R() < 0.08) { const x = x0 + 2 + R() * (CHUNK - 4), z = z0 + 2 + R() * (CHUNK - 4); if (!home(x, z, 1)) d.wreck = { x, z, yaw: R() * TAU }; }
+  // keep generated features off each other
+  d.stacks = d.stacks.filter(t => d.islets.every(I => Math.hypot(t.x - I.x, t.z - I.z) > I.r * 1.6 + t.r));
+  _chunks.set(key, d);
+  if (_chunks.size > 4000) _chunks.clear();
+  return d;
+}
+function isletsNear(x, z) {
+  if (!INFINITE) return ISLETS;
+  const ci = Math.floor(x / CHUNK), cj = Math.floor(z / CHUNK), out = ISLETS.slice();
+  for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) out.push(...chunkDesc(ci + a, cj + b).islets);
+  return out;
+}
 function setWorld(w) {
   BLOCK = w.size; HALF = BLOCK / 2; TN = w.terrainRes; TDX = BLOCK / TN; GN = w.waterRes;
   GDX = w.waterCell > 0 ? w.waterCell : BLOCK / GN;
   if (GN * GDX > BLOCK) GDX = BLOCK / GN;
   Object.assign(SWELL, w.swell, { fade: GN * GDX < BLOCK - 1e-6 ? w.windowFade : 0 });
   ISLETS.length = 0; for (const it of w.islets || []) ISLETS.push({ ...it });
+  INFINITE = !!w.infinite;
 }
 const swellAt = (x, z, t) => {
   if (SWELL.amp <= 0) return 0;
@@ -147,7 +176,7 @@ function terrainFn(x, z) {
   hills *= (1 + 0.35 * fbm2(x * 2.2, z * 2.2, 3)) * LAYOUT.hills;
   h += hills * smooth(0.78, 0.45, r);
   // islets: sandy humps with a green crown
-  for (const I of ISLETS) {
+  for (const I of isletsNear(x, z)) {
     const d = Math.hypot(x - I.x, z - I.z) / I.r + 0.12 * fbm2(x * 2 + I.x, z * 2 + I.z, 2);
     if (d > 1.6) continue;
     let ih = lerp(sea, WL - 0.14, smooth(1.55, 1.1, d));

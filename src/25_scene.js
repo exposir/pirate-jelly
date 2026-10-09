@@ -1,7 +1,7 @@
 
 // ───────────────────────── scene geometry ─────────────────────────
-const NODE = { STATIC: 0, SHIP: 1, LID: 2, PALM: 3, NPALM: 16, CHAIN: 19, NCHAIN: 26, BALL: 45, NBALL: 16, BARREL: 61, NBARREL: 8, COIN: 69, NCOIN: 30 };
-const NODE_COUNT = 100;
+const NODE = { STATIC: 0, SHIP: 1, LID: 2, PALM: 3, NPALM: 16, CHAIN: 19, NCHAIN: 26, BALL: 45, NBALL: 16, BARREL: 61, NBARREL: 8, COIN: 69, NCOIN: 30, CHUNK: 99, NCHUNK: 40 };
+const NODE_COUNT = 139;
 const COL = {
   hullBlack: [0.085, 0.075, 0.07], ochre: [0.78, 0.55, 0.17], red: [0.55, 0.12, 0.08], deck: [0.6, 0.42, 0.25],
   wood: [0.52, 0.33, 0.18], woodD: [0.33, 0.2, 0.11], iron: [0.12, 0.115, 0.11], gold: [1.0, 0.74, 0.25],
@@ -409,12 +409,9 @@ function buildSkull(b, info) {
   info.skullEyes = [eyeW(-1), eyeW(1)];
 }
 
-function buildSeabed(b, info) {
-  b.node = 0;
-  _seed = 777 + (Math.floor(FLORA.seed) % 1000);
-  // wreck — fore half of a ship on her side
-  const [wx, wz] = LAYOUT.wreck, wy = T0(wx, wz);
-  b.push().t(wx, wy + 0.17, wz).ry(-0.6).rz(1.25).s(0.9);
+function buildWreck(b, wx, wz, yaw, H) {
+  const wy = H(wx, wz);
+  b.push().t(wx, wy + 0.17, wz).ry(yaw).rz(1.25).s(0.9);
   const rot = hexc(0x5a4632), algae = hexc(0x4f6b3a);
   const wcol = (p) => vlerp(rot, algae, clamp(0.5 + 0.5 * noise3(p[0] * 6, p[1] * 6, p[2] * 6), 0, 1) * 0.7);
   for (let j = 0; j < 9; j++) {
@@ -431,21 +428,73 @@ function buildSeabed(b, info) {
   b.push().c(hexc(0x6b5238)).line(HULL.pt(0.5, 0.97, -1), HULL.pt(0.5, 0.97, 1), 0.012, 5).line(HULL.pt(0.72, 0.97, -1), HULL.pt(0.72, 0.97, 1), 0.012, 5).pop();
   b.pop();
   // broken mast + yard
-  b.push().c(hexc(0x5f4a33)).t(wx - 0.55, T0(wx - 0.55, wz - 0.2) + 0.03, wz - 0.2).ry(0.4).rz(PI / 2 - 0.12).t(0, -0.45, 0).cyl(0.025, 0.018, 0.85, 8).pop();
-  b.push().c(hexc(0x5f4a33)).t(wx - 0.35, T0(wx - 0.35, wz + 0.15) + 0.02, wz + 0.15).ry(-0.9).rz(PI / 2).t(0, -0.25, 0).cyl(0.012, 0.012, 0.5, 6).pop();
+  const c = Math.cos(yaw + 0.6), sn = Math.sin(yaw + 0.6), at = (dx, dz) => [wx + c * dx + sn * dz, wz - sn * dx + c * dz];
+  { const [x, z] = at(-0.55, -0.2); b.push().c(hexc(0x5f4a33)).t(x, H(x, z) + 0.03, z).ry(0.4 + yaw + 0.6).rz(PI / 2 - 0.12).t(0, -0.45, 0).cyl(0.025, 0.018, 0.85, 8).pop(); }
+  { const [x, z] = at(-0.35, 0.15); b.push().c(hexc(0x5f4a33)).t(x, H(x, z) + 0.02, z).ry(-0.9 + yaw + 0.6).rz(PI / 2).t(0, -0.25, 0).cyl(0.012, 0.012, 0.5, 6).pop(); }
+}
+function buildKelp(b, kx, kz, H) {
+  for (let s = 0; s < 4; s++) {
+    const x = kx + rr(-0.12, 0.12), z = kz + rr(-0.12, 0.12), y0 = H(x, z), Hh = (WL - 0.1 - y0) * rr(0.6, 0.95), ph = rnd() * 6;
+    if (Hh < 0.1) continue;
+    const k0 = hexc(0x5d7a22), k1 = hexc(0xb7c74a);
+    b.push().m(2).surf(2, 18, (xx, t) => {
+      const w = 0.028 * (0.4 + 0.6 * Math.sin(PI * Math.min(t * 1.4, 1))), q = xx * 2 - 1;
+      return [x + 0.05 * Math.sin(t * 7 + ph) + q * w, y0 + Hh * t, z + 0.04 * Math.cos(t * 5 + ph) + q * w * 0.4];
+    }, { col: (xx, t) => vlerp(k0, k1, t), w: (xx, t) => 1 + t * 1.6 }).pop();
+  }
+}
+
+// one streamed chunk of an infinite sea; geometry is local to the chunk corner (x0, z0)
+function buildChunk(d, node) {
+  const b = new MB(); b.node = node; _seed = d.seed % 2147483646 + 1;
+  const H = (x, z) => terrainFn(x + d.x0, z + d.z0), L = (x, z) => [x - d.x0, z - d.z0];
+  const rocks = [];
+  for (const I of d.islets) {
+    const [ix, iz] = L(I.x, I.z);
+    for (let k = Math.max(1, Math.round(I.r * 2.4)); k--;) {
+      const a = rnd() * TAU, r = rr(0, I.r * 0.45), x = ix + Math.cos(a) * r, z = iz + Math.sin(a) * r;
+      b.push().t(x, H(x, z) - 0.02, z); buildPalm(b, { x, z, h: rr(0.6, 1.0), lean: [rr(-0.3, 0.3), rr(-0.3, 0.3)] }, d.seed % 997 + k, node); b.pop();
+    }
+    b.node = node;
+    for (let k = Math.round(I.r * 5); k--;) {
+      const a = rnd() * TAU, r = rr(I.r * 0.75, I.r * 1.05), x = ix + Math.cos(a) * r, z = iz + Math.sin(a) * r, rs = rr(0.05, 0.12);
+      b.push().t(x, H(x, z) + rs * 0.2, z).ry(rnd() * TAU); rock(b, rs, rnd() * 50); b.pop();
+    }
+    for (let k = Math.round(I.r * 3); k--;) {
+      const a = rnd() * TAU, r = rr(0, I.r * 0.5), x = ix + Math.cos(a) * r, z = iz + Math.sin(a) * r, rs = rr(0.07, 0.13);
+      b.push().m(7).c(vscale(hexc([0x2f9a48, 0x48b85a, 0x1f7d3f][k % 3]), rr(0.85, 1.15))).t(x, H(x, z) + rs * 0.5, z).sphere(rs, rs * 0.85, rs, 12, 8).pop();
+      const fc = [0xff6fa8, 0xffd23f, 0xff4b3a][k % 3];
+      b.push().m(7).c(hexc(fc)).t(x + rr(-0.06, 0.06), H(x, z) + rs * 1.2, z + rr(-0.06, 0.06)).sphere(0.016, 0.011, 0.016, 6, 4).pop();
+    }
+  }
+  for (const t of d.stacks) {   // sea stacks: weathered pillars poking out of the jelly
+    const [x, z] = L(t.x, t.z), g = H(x, z), top = WL + t.h, hh = (top - g) / 2, sd = rnd() * 40;
+    b.push().c(vscale(COL.rock, rr(0.8, 1.05))).t(x, g + hh, z).ry(rnd() * TAU)
+      .sphere(t.r, hh, t.r * 0.85, 10, 9, p => 0.22 * noise3(p[0] * 2.4 + sd, p[1] * 3.5, p[2] * 2.4) - 0.12 * p[1]).pop();
+    b.push().m(7).c(hexc(0x4f8f36)).t(x, top - 0.02, z).sphere(t.r * 0.55, 0.05, t.r * 0.5, 8, 5).pop();
+    rocks.push([t.x, t.z, t.r * 1.15]);
+  }
+  if (d.wreck) { const [x, z] = L(d.wreck.x, d.wreck.z); buildWreck(b, x, z, d.wreck.yaw, H); }
+  for (let k = d.kelp; k--;) { const x = rr(0.3, CHUNK - 0.3), z = rr(0.3, CHUNK - 0.3); if (H(x, z) < WL - 0.3) buildKelp(b, x, z, H); }
+  for (let k = d.coins; k--;) { const x = rr(0.3, CHUNK - 0.3), z = rr(0.3, CHUNK - 0.3); if (H(x, z) < WL - 0.1) { b.push().t(x, H(x, z) + 0.004, z).rx(rr(-0.15, 0.15)); coinGeo(b, 0.035); b.pop(); } }
+  for (let k = d.bubbles; k--;) {
+    const x = rr(0.2, CHUNK - 0.2), z = rr(0.2, CHUNK - 0.2), g = H(x, z); if (g > WL - 0.15) continue;
+    const r = rr(0.006, 0.026); b.push().m(9).c([0.9, 0.97, 1]).t(x, rr(g + 0.05, WL - 0.06), z).sphere(r, r, r, 8, 6).pop();
+  }
+  return { V: new Float32Array(b.V), I: new Uint32Array(b.I), rocks };
+}
+
+function buildSeabed(b, info) {
+  b.node = 0;
+  _seed = 777 + (Math.floor(FLORA.seed) % 1000);
+  // wreck — fore half of a ship on her side
+  const [wx, wz] = LAYOUT.wreck, wy = T0(wx, wz);
+  buildWreck(b, wx, wz, -0.6, T0);
   info.wreck = [{ c: [wx, wy + 0.15, wz], r: 0.3 }, { c: [wx - 0.25, wy + 0.12, wz - 0.2], r: 0.22 }, { c: [wx + 0.25, wy + 0.12, wz + 0.2], r: 0.22 }];
   // kelp
   const kelpSpots = [[1.9, 0.3], [0.55, 1.95], [-1.65, 1.6], [2.05, 1.85], [-2.1, 0.4], [1.0, 0.25], [-0.9, 1.9], [2.2, -0.4]].slice(0, FLORA.kelpClumps);
   for (let g = 0; kelpSpots.length < FLORA.kelpClumps && g < 5000; g++) { const x = rr(-HALF + 0.3, HALF - 0.3), z = rr(-HALF + 0.3, HALF - 0.3); if (T0(x, z) < WL - 0.3) kelpSpots.push([x, z]); }
-  for (const [kx, kz] of kelpSpots) for (let s = 0; s < 4; s++) {
-    const x = kx + rr(-0.12, 0.12), z = kz + rr(-0.12, 0.12), y0 = T0(x, z), H = (WL - 0.1 - y0) * rr(0.6, 0.95), ph = rnd() * 6;
-    if (H < 0.1) continue;
-    const k0 = hexc(0x5d7a22), k1 = hexc(0xb7c74a);
-    b.push().m(2).surf(2, 18, (xx, t) => {
-      const w = 0.028 * (0.4 + 0.6 * Math.sin(PI * Math.min(t * 1.4, 1))), q = xx * 2 - 1;
-      return [x + 0.05 * Math.sin(t * 7 + ph) + q * w, y0 + H * t, z + 0.04 * Math.cos(t * 5 + ph) + q * w * 0.4];
-    }, { col: (xx, t) => vlerp(k0, k1, t), w: (xx, t) => 1 + t * 1.6 }).pop();
-  }
+  for (const [kx, kz] of kelpSpots) buildKelp(b, kx, kz, T0);
   // doubloons on the floor
   for (let i = 0; i < FLORA.seabedCoins; i++) {
     const x = wx + rr(-0.6, 0.4), z = wz + rr(-0.5, 0.45), y = T0(x, z);

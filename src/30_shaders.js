@@ -6,7 +6,7 @@ struct Uni {
   cam: vec4f, sun: vec4f, sunCol: vec4f, skyTop: vec4f, skyBot: vec4f, amb: vec4f,
   fire: vec4f, fireCol: vec4f, jAbs: vec4f, jCol: vec4f, deform: vec4f, misc: vec4f, misc2: vec4f,
   grid: vec4f, moon: vec4f, bg: vec4f, camR: vec4f, camU: vec4f, lamp: vec4f, misc3: vec4f,
-  world: vec4f, swell: vec4f,   // world: half, terrain N, size, terrain dx · swell: amp, wavelength, speed, window fade cells
+  world: vec4f, swell: vec4f, center: vec4f,   // center: block centre xz (sim coords)   // world: half, terrain N, size, terrain dx · swell: amp, wavelength, speed, window fade cells
 };
 struct Node { m: mat4x4f, p: vec4f };
 @group(0) @binding(0) var<uniform> U: Uni;
@@ -21,11 +21,13 @@ fn vnoise(p: vec2f) -> f32 {
   return mix(mix(hash21(i), hash21(i + vec2f(1.0, 0.0)), u.x), mix(hash21(i + vec2f(0.0, 1.0)), hash21(i + vec2f(1.0, 1.0)), u.x), u.y);
 }
 fn fbm(p0: vec2f) -> f32 { var p = p0; var s = 0.0; var a = 0.5; for (var i = 0; i < 4; i++) { s += a * vnoise(p); p = p * 2.03 + vec2f(1.7, -3.1); a *= 0.5; } return s; }
-fn deformP(p: vec3f) -> vec3f {
+fn deformP(p0: vec3f) -> vec3f {
+  let c = vec3f(U.center.x, 0.0, U.center.y); let p = p0 - c;
   let h = clamp(p.y / U.deform.w, 0.0, 1.8);
   let sq = U.deform.z;
-  return vec3f(p.x * (1.0 + sq * 0.5) + U.deform.x * h, p.y * (1.0 - sq), p.z * (1.0 + sq * 0.5) + U.deform.y * h);
+  return c + vec3f(p.x * (1.0 + sq * 0.5) + U.deform.x * h, p.y * (1.0 - sq), p.z * (1.0 + sq * 0.5) + U.deform.y * h);
 }
+fn outside(lp: vec3f) -> bool { let q = abs(lp.xz - U.center.xy); return max(q.x, q.y) > U.world.x; }
 fn toWorld(lp: vec3f) -> vec3f { return (U.block * vec4f(deformP(lp), 1.0)).xyz; }
 fn wLoad(i: vec2i) -> vec4f { let n = i32(U.grid.x) - 1; return textureLoad(hf, clamp(i, vec2i(0), vec2i(n)), 0); }
 fn waterRaw(xz: vec2f) -> vec2f {
@@ -46,7 +48,7 @@ fn etaAt(xz: vec2f) -> f32 { return waterRaw(xz).x + swellAt(xz); }
 fn foamAt(xz: vec2f) -> f32 { return waterRaw(xz).y; }
 fn tLoad(i: vec2i) -> f32 { let n = i32(U.world.y) - 1; return textureLoad(terrTex, clamp(i, vec2i(0), vec2i(n)), 0).x; }
 fn terrAt(xz: vec2f) -> f32 {
-  let g = (xz + U.world.x) / U.world.w - 0.5;
+  let g = (xz - U.center.xy + U.world.x) / U.world.w - 0.5;
   let f0 = floor(g); let f = g - f0; let i = vec2i(f0);
   return mix(mix(tLoad(i), tLoad(i + vec2i(1, 0)), f.x), mix(tLoad(i + vec2i(0, 1)), tLoad(i + vec2i(1, 1)), f.x), f.y);
 }
@@ -174,7 +176,9 @@ fn nodeXform(v: VIn) -> VOut {
   o.clip = U.viewProj * vec4f(o.wp, 1.0);
   return o;
 }
-@vertex fn vsShadow(v: VIn) -> @builtin(position) vec4f { let o = nodeXform(v); return U.lightVP * vec4f(o.wp, 1.0); }
+struct SOut { @builtin(position) clip: vec4f, @location(0) lp: vec3f };
+@vertex fn vsShadow(v: VIn) -> SOut { let o = nodeXform(v); var r: SOut; r.clip = U.lightVP * vec4f(o.wp, 1.0); r.lp = o.lp; return r; }
+@fragment fn fsShadow(i: SOut) { if (outside(i.lp)) { discard; } }
 `;
 const WGSL_NODES_MAIN = WGSL_NODES + WGSL_SHADOW_BIND + `
 @vertex fn vs(v: VIn) -> VOut { return nodeXform(v); }
@@ -205,6 +209,7 @@ fn flagCol(uv: vec2f) -> vec3f {
   return c;
 }
 @fragment fn fs(i: VOut, @builtin(front_facing) ff: bool) -> @location(0) vec4f {
+  if (outside(i.lp)) { discard; }                        // the block is a cut-away: nothing outside it
   let mat = i32(i.mat + 0.5);
   var n = normalize(i.n); if (!ff) { n = -n; }
   var alb = i.col;
@@ -225,7 +230,7 @@ fn sideN(s: f32) -> vec3f {
   if (k == 2) { return vec3f(0.0, 0.0, 1.0); } return vec3f(0.0, 0.0, -1.0);
 }
 fn terrXform(v: vec4f) -> VOut {
-  let xz = v.xy; let kind = v.z;
+  let xz = v.xy + U.center.xy; let kind = v.z;
   let h = terrAt(xz);
   var lp = vec3f(xz.x, h, xz.y); var ln = vec3f(0.0, 1.0, 0.0);
   if (kind < 0.5) {
@@ -353,7 +358,7 @@ fn boxHit(ro: vec3f, rd: vec3f, bmin: vec3f, bmax: vec3f) -> vec2f {
   let lp = (U.invBlock * vec4f(wp, 1.0)).xyz;
   // light through the jelly block: tint + caustics
   let ld = normalize((U.invBlock * vec4f(U.sun.xyz, 0.0)).xyz);
-  let hit = boxHit(lp, ld, vec3f(-U.world.x, 0.0, -U.world.x), vec3f(U.world.x, U.jAbs.w, U.world.x));
+  let hit = boxHit(lp, ld, vec3f(U.center.x - U.world.x, 0.0, U.center.y - U.world.x), vec3f(U.center.x + U.world.x, U.jAbs.w, U.center.y + U.world.x));
   var sunC = U.sunCol.rgb * U.sun.w;
   let sh = mix(1.0, shadowF(wp, n), U.sunCol.w);
   if (hit.y > max(hit.x, 0.0)) {
@@ -365,7 +370,7 @@ fn boxHit(ro: vec3f, rd: vec3f, bmin: vec3f, bmax: vec3f) -> vec2f {
   var col = alb * sunC * max(n.y * U.sun.y, 0.0) * sh;
   col += alb * vec3f(0.55, 0.65, 1.0) * U.moon.w * 0.05;
   // contact shadow around the block foot
-  let q = abs(lp.xz) - vec2f(U.world.x);
+  let q = abs(lp.xz - U.center.xy) - vec2f(U.world.x);
   let dd = length(max(q, vec2f(0.0))) + min(max(q.x, q.y), 0.0);
   let ao = 1.0 - 0.5 * exp(-max(dd, 0.0) * 5.0);
   col += alb * U.amb.rgb * ao;
@@ -389,7 +394,7 @@ fn sideN(s: f32) -> vec3f {
   if (k == 2) { return vec3f(0.0, 0.0, 1.0); } return vec3f(0.0, 0.0, -1.0);
 }
 @vertex fn vs(@location(0) v: vec4f) -> JOut {
-  let xz = v.xy; let kind = v.z;
+  let xz = v.xy + U.center.xy; let kind = v.z;
   var lp = vec3f(xz.x, U.jAbs.w + etaAt(xz), xz.y); var ln = vec3f(0.0, 1.0, 0.0);
   if (kind < 0.5) {
     let d = U.grid.y;
@@ -461,7 +466,7 @@ fn proj(p: vec3f) -> vec2f { let c = U.viewProj * vec4f(p, 1.0); return vec2f(c.
     col = mix(col, vec3f(0.98, 0.98, 0.95) * (U.amb.rgb * 1.2 + sunC * 0.7 + U.fireCol.rgb * U.fire.w * 0.1), foam * 0.85);
   }
   // bright crescent rims on the cut edges
-  let e = vec2f(U.world.x) - abs(i.lp.xz);
+  let e = vec2f(U.world.x) - abs(i.lp.xz - U.center.xy);
   var rim = 0.0;
   if (isTop) { rim = exp(-min(e.x, e.y) * 55.0); }
   else {

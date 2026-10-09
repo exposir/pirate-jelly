@@ -6,7 +6,7 @@ An interactive WebGPU/WGSL diorama: a translucent jelly ocean block with a tropi
 | --- | --- |
 | [`/`](https://exposir.github.io/pirate-jelly/) | The original v1 (English UI). Frozen — not rebuilt. |
 | [`/studio/`](https://exposir.github.io/pirate-jelly/studio/) | Pirate Jelly on the configurable series shell — Chinese UI with a live config editor (✎ 配置). |
-| [`/game/`](https://exposir.github.io/pirate-jelly/game/) | Pirate Voyage — take the helm in a 20× larger jelly sea (arrow keys / WASD, Space to fire, on-screen helm on touch). |
+| [`/game/`](https://exposir.github.io/pirate-jelly/game/) | Pirate Voyage — take the helm on an endless jelly sea: the block travels with the ship, islets / sea stacks / wrecks / kelp are generated chunk by chunk, with a floating origin (arrow keys / WASD, Space to fire, on-screen helm on touch). |
 | [`/starter/`](https://exposir.github.io/pirate-jelly/starter/) | Blank series template: the same shell around a minimal ray-marched jelly. Start new studies from here. |
 
 ## Configuration
@@ -17,7 +17,7 @@ Every study is driven by one `DEFAULT_CONFIG` object (`src/06_config_pirate.js`,
 - `theme` — fonts, light / dark palettes, `darkAt` (night level where the page turns dark)
 - `panel` — the right-hand control panel, declared as sections of `buttons` / `meter` / `counts` / `swatches` / `slider` items
 - `state` — initial control values; `flavours`, `day` (time-of-day keyframes), `sim`, `camera`
-- `world` — block size, terrain resolution, the water-simulation window (it follows the ship when smaller than the block), analytic swell, extra islets
+- `world` — `infinite` (block follows the ship, chunked generation), block size, terrain resolution, the water-simulation window (it follows the ship when smaller than the block), analytic swell, extra islets
 - `voyage` — helm mode: thrust, reverse, rudder, follow-camera distance / elevation / lag
 - `scene` — island, ship, anchor, Skull Rock, camp, wreck, palms and flora counts (editing these rebuilds the world)
 
