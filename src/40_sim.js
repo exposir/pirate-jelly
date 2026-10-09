@@ -8,11 +8,15 @@ class Water {
     this.lap = new Float32Array(N * N);
     this.u = new Float32Array((N + 1) * N); this.v = new Float32Array(N * (N + 1));
     this.terr0 = new Float32Array(N * N); this.terr = new Float32Array(N * N);
-    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) this.terr0[j * N + i] = terrainFn(this.cx(i), this.cx(j));
-    this.tex = new Float32Array(N * N * 4);
+    this.loadTerrain(false);
+    this.tex = new Float32Array(N * N * 4); this.g = G_WAVE;
     this.reset();
   }
   cx(i) { return -HALF + (i + 0.5) * GDX; }
+  loadTerrain(reset = true) {
+    for (let j = 0; j < GN; j++) for (let i = 0; i < GN; i++) this.terr0[j * GN + i] = terrainFn(this.cx(i), this.cx(j));
+    if (reset) this.reset();
+  }
   reset() {
     this.terr.set(this.terr0); this.eta.fill(0); this.u.fill(0); this.v.fill(0); this.foam.fill(0); this.P.fill(0);
     this.updateDepth();
@@ -67,13 +71,13 @@ class Water {
     for (let j = 0; j < N; j++) for (let i = 1; i < N; i++) {
       const a = j * N + i - 1, b = a + 1, f = j * (N + 1) + i;
       if (!(wet[a] && wet[b])) { u[f] = 0; continue; }
-      const du = -G_WAVE * ((eta[b] + P[b]) - (eta[a] + P[a])) * idx + gx + tension * (lap[b] - lap[a]) * idx;
+      const du = -this.g * ((eta[b] + P[b]) - (eta[a] + P[a])) * idx + gx + tension * (lap[b] - lap[a]) * idx;
       u[f] = (u[f] + du * dt) * kd;
     }
     for (let j = 1; j < N; j++) for (let i = 0; i < N; i++) {
       const a = (j - 1) * N + i, b = a + N, f = j * N + i;
       if (!(wet[a] && wet[b])) { v[f] = 0; continue; }
-      const dv = -G_WAVE * ((eta[b] + P[b]) - (eta[a] + P[a])) * idx + gz + tension * (lap[b] - lap[a]) * idx;
+      const dv = -this.g * ((eta[b] + P[b]) - (eta[a] + P[a])) * idx + gz + tension * (lap[b] - lap[a]) * idx;
       v[f] = (v[f] + dv * dt) * kd;
     }
     for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {

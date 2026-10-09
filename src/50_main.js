@@ -7,47 +7,41 @@ const mqReduce = matchMedia('(prefers-reduced-motion: reduce)');
 let REDUCED = mqReduce.matches || QS.has('reduced');
 mqReduce.addEventListener?.('change', e => { REDUCED = e.matches; });
 
-function setStatus(cls, text) { const s = $('status'); s.className = cls; s.querySelector('span').textContent = text; }
-function fail(msg) {
-  document.body.classList.add('na'); setStatus('na', 'WebGPU · unavailable');
-  if (msg) $('fbMsg').innerHTML = msg;
-  console.error('[pirate-jelly] ' + (msg || 'no WebGPU'));
+const CFG = () => Shell.cfg;
+const lin = h => [1, 3, 5].map(i => Math.pow(parseInt(h.slice(i, i + 2), 16) / 255, 2.2));   // sRGB hex → linear
+const fail = msg => Shell.fail(msg);
+function flavourAt(i) {
+  const L = CFG().flavours, f = L[clamp(i, 0, L.length - 1)];
+  return { abs: lin(f.tint).map(t => -Math.log(Math.max(t, 0.004)) * f.density), col: lin(f.glow) };
 }
-
-const FLAVOURS = [
-  { name: 'Lagoon', abs: [1.5, 0.3, 0.42], col: [0.06, 0.42, 0.42] },
-  { name: 'Rum', abs: [0.3, 0.8, 2.0], col: [0.55, 0.28, 0.05] },
-  { name: 'Kraken', abs: [0.85, 1.4, 0.4], col: [0.3, 0.09, 0.45] },
-];
-const hx = h => [(h >> 16 & 255) / 255, (h >> 8 & 255) / 255, (h & 255) / 255].map(c => Math.pow(c, 2.2) * 1.3);   // sRGB → linear, lifted for the tonemapper
-const DAY = {
-  t: [0, 0.17, 0.33, 0.5, 0.67, 0.83, 1],
-  names: ['Noon', 'Afternoon', 'Golden hour', 'Sunset', 'Dusk', 'Night', 'Midnight'],
-  sunEl: [66, 44, 18, 4, -10, -30, -50], sunAz: [-150, -135, -118, -105, -95, -85, -75],
-  sunI: [1.6, 1.52, 1.4, 1.0, 0, 0, 0],
-  sunC: [[1, 0.96, 0.9], [1, 0.9, 0.76], [1, 0.72, 0.44], [1, 0.48, 0.28], [0.6, 0.5, 0.6], [0.55, 0.65, 1], [0.55, 0.65, 1]],
-  bg: [0xe9e3d8, 0xe8dccb, 0xf0cfaa, 0xe9a689, 0x5d5277, 0x1a2038, 0x0c1122].map(hx),
-  top: [0xd3dbe0, 0xd8d6d0, 0xe9c19f, 0xc98a8e, 0x343a66, 0x10182f, 0x060a16].map(hx),
-  amb: [[0.42, 0.44, 0.48], [0.41, 0.4, 0.4], [0.4, 0.33, 0.3], [0.36, 0.27, 0.29], [0.22, 0.21, 0.34], [0.07, 0.09, 0.16], [0.05, 0.065, 0.12]],
-  moon: [0, 0, 0, 0, 0.45, 0.9, 1], night: [0, 0, 0, 0.12, 0.5, 0.88, 1], stars: [0, 0, 0, 0, 0.3, 0.85, 1],
-  fire: [0.18, 0.18, 0.25, 0.42, 1.0, 1.45, 1.6], glow: [0, 0.1, 0.6, 1, 0.5, 0, 0],
-};
 function dayAt(t) {
-  const T = DAY.t; let i = 0; while (i < T.length - 2 && t > T[i + 1]) i++;
-  const f = smooth(0, 1, (t - T[i]) / (T[i + 1] - T[i]));
-  const L = k => { const a = DAY[k][i], b = DAY[k][i + 1]; return Array.isArray(a) ? vlerp(a, b, f) : lerp(a, b, f); };
-  return { sunEl: L('sunEl'), sunAz: L('sunAz'), sunI: L('sunI'), sunC: L('sunC'), bg: L('bg'), top: L('top'), amb: L('amb'), moon: L('moon'),
-    night: L('night'), stars: L('stars'), fire: L('fire'), glow: L('glow'), name: DAY.names[Math.round(t * 6)] };
+  const K = CFG().day, n = K.length;
+  if (n === 1) return dayKey(K[0], K[0], 0);
+  const x = clamp(t, 0, 1) * (n - 1), i = Math.min(Math.floor(x), n - 2);
+  return dayKey(K[i], K[i + 1], smooth(0, 1, x - i), K[Math.round(x)].name);
+}
+function dayKey(a, b, f, name = a.name) {
+  const L = k => lerp(a[k], b[k], f), C = k => vlerp(lin(a[k]), lin(b[k]), f), lift = c => c.map(v => v * 1.3);
+  return { sunEl: L('sunElevation'), sunAz: L('sunAzimuth'), sunI: L('sunIntensity'), sunC: C('sunColor'), bg: lift(C('backdrop')), top: lift(C('sky')),
+    amb: C('ambient'), moon: L('moon'), night: L('night'), stars: L('stars'), fire: L('fire'), glow: L('glow'), name };
 }
 
 async function main() {
+  const actions = {};
+  let hooks = { onState() { }, onRebuild() { }, onConfig() { } };
+  await Shell.mount({
+    defaults: DEFAULT_CONFIG, actions, rebuild: ['scene'], panelDeps: ['flavours', 'day'],
+    formatters: { dayName: v => dayAt(v / 1000).name },
+    onState: (k, v) => hooks.onState(k, v), onRebuild: c => hooks.onRebuild(c), onConfig: (p, c) => hooks.onConfig(p, c),
+  });
+  applySceneConfig(CFG().scene);
   if (!navigator.gpu) return fail();
   let adapter = null;
   try { adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' }); } catch (e) { }
-  if (!adapter) return fail('WebGPU is present, but no suitable <b>GPU adapter</b> could be acquired on this device.');
+  if (!adapter) return fail('浏览器支持 WebGPU，但没有拿到可用的<b>显卡适配器</b>。');
   let device;
-  try { device = await adapter.requestDevice(); } catch (e) { return fail('The GPU adapter refused to create a device: ' + e.message); }
-  device.lost.then(info => { console.error('[pirate-jelly] device lost', info.reason, info.message, performance.now().toFixed(0)); if (info.reason !== 'destroyed') fail('The GPU device was lost (' + info.message + '). Reload to try again.'); });
+  try { device = await adapter.requestDevice(); } catch (e) { return fail('显卡适配器拒绝创建设备：' + e.message); }
+  device.lost.then(info => { console.error('[pirate-jelly] device lost', info.reason, info.message, performance.now().toFixed(0)); if (info.reason !== 'destroyed') fail('GPU 设备丢失（' + info.message + '），请刷新重试。'); });
   device.onuncapturederror = e => console.error('[pirate-jelly] GPU error:', e.error.message);
 
   const canvas = $('gl'), ctx = canvas.getContext('webgpu');
@@ -55,25 +49,29 @@ async function main() {
   ctx.configure({ device, format, alphaMode: 'opaque' });
   const HDR = 'rgba16float', DEPTH = 'depth32float', SHADOW = 2048;
 
-  // ── world ──
-  const world = buildWorld();
-  const info = world.info;
+  // ── world (rebuildable from config.scene) ──
   const grid = buildGridMesh(GN);
   const water = new Water(), ship = new Ship(), parts = new Particles();
   const bodies = [];
   for (let i = 0; i < NODE.NBALL; i++) bodies.push(new Body('ball', NODE.BALL + i));
   for (let i = 0; i < NODE.NBARREL; i++) bodies.push(new Body('barrel', NODE.BARREL + i));
   for (let i = 0; i < NODE.NCOIN; i++) bodies.push(new Body('coin', NODE.COIN + i));
-  const palms = PALMS.map((P, i) => ({ ...P, base: [P.x, terrainFn(P.x, P.z) - 0.02, P.z], bend: [0, 0, 0], bv: [0, 0, 0], target: null, phase: 1 + i * 1.7 }));
   const chest = { ang: 0, vel: 0, target: 0, open: false };
-  const statics = [...(info.rocks || []), ...(info.wreck || []),
-    { c: vadd(info.chest.p, [0, 0.08, 0]), r: 0.16 }, { c: info.fire, r: 0.17 },
-    { c: [1.4, T0(1.4, -1.0) + 0.09, -1.0], r: 0.14 }, { c: [1.5, T0(1.5, -1.3) + 0.1, -1.3], r: 0.15 },
-    { c: [1.12, T0(1.12, -0.9) + 0.05, -0.9], r: 0.09 }];
+  let world, info, palms, statics;
+  function makeWorld() {
+    world = buildWorld(); info = world.info;
+    palms = PALMS.map((P, i) => ({ ...P, base: [P.x, terrainFn(P.x, P.z) - 0.02, P.z], bend: [0, 0, 0], bv: [0, 0, 0], target: null, phase: 1 + i * 1.7 }));
+    const C = LAYOUT.chest;
+    statics = [...(info.rocks || []), ...(info.wreck || []),
+      { c: vadd(info.chest.p, [0, 0.08, 0]), r: 0.16 }, { c: info.fire, r: 0.17 },
+      { c: [C[0] + 0.42, T0(C[0] + 0.42, C[1] + 0.18) + 0.09, C[1] + 0.18], r: 0.14 }, { c: [C[0] + 0.52, T0(C[0] + 0.52, C[1] - 0.12) + 0.1, C[1] - 0.12], r: 0.15 },
+      { c: [C[0] + 0.14, T0(C[0] + 0.14, C[1] + 0.28) + 0.05, C[1] + 0.28], r: 0.09 }];
+  }
+  makeWorld();
 
   // ── GPU resources ──
   const buf = (data, usage) => { const b = device.createBuffer({ size: Math.max(16, data.byteLength + 3 & ~3), usage: usage | GPUBufferUsage.COPY_DST }); device.queue.writeBuffer(b, 0, data); return b; };
-  const nodeVB = buf(world.V, GPUBufferUsage.VERTEX), nodeIB = buf(world.I, GPUBufferUsage.INDEX);
+  let nodeVB = buf(world.V, GPUBufferUsage.VERTEX), nodeIB = buf(world.I, GPUBufferUsage.INDEX);
   const gridVB = buf(grid.V, GPUBufferUsage.VERTEX), gridIB = buf(grid.I, GPUBufferUsage.INDEX);
   const UF = new Float32Array(160);
   const uniBuf = device.createBuffer({ size: UF.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
@@ -123,7 +121,7 @@ async function main() {
   const [mNodesSh, mNodes, mTerrSh, mTerr, mBg, mJelly, mPart, mPost] = await Promise.all([
     mod(WGSL_NODES, 'nodes-shadow'), mod(WGSL_NODES_MAIN, 'nodes'), mod(WGSL_TERRAIN, 'terrain-shadow'), mod(WGSL_TERRAIN_MAIN, 'terrain'),
     mod(WGSL_BG, 'backdrop'), mod(WGSL_JELLY, 'jelly'), mod(WGSL_PART, 'particles'), mod(WGSL_POST, 'post')]);
-  if (shaderErrors) return fail('Shader compilation failed — see the console for details.');
+  if (shaderErrors) return fail('着色器编译失败，详情见控制台。');
 
   const nodeLayout = [{ arrayStride: 48, attributes: [
     { shaderLocation: 0, offset: 0, format: 'float32x3' }, { shaderLocation: 1, offset: 12, format: 'float32x3' },
@@ -167,15 +165,15 @@ async function main() {
 
   // ── state ──
   const S = {
-    time: 0, paused: false, flavour: 0, firm: 0.62, damp: 0.3, day: 0.08,
+    time: 0, paused: false, flavour: Shell.state.flavour ?? 0, firm: (Shell.state.firmness ?? 62) / 100, damp: (Shell.state.damping ?? 30) / 100, day: (Shell.state.day ?? 80) / 1000,
     tilt: [0, 0], tiltV: [0, 0], tiltTarget: null, shear: [0, 0], shearV: [0, 0], squash: 0, squashV: 0,
     shots: 0, roar: 0, vig: 0, wind: [0, 0.3], fireFlick: 1,
     cam: { az: 0.78, el: 0.47, dist: 12.5, target: [0, 1.35, 0.1] },
   };
   const camHome = () => {
-    const asp = canvas.clientWidth / Math.max(1, canvas.clientHeight);
-    S.cam.az = 0.78; S.cam.el = 0.47; S.cam.target = [0, 1.35, 0.1];
-    S.cam.dist = asp < 1 ? Math.min(12.5 / Math.max(asp, 0.45) * 0.9, 24) : 12.5;
+    const asp = canvas.clientWidth / Math.max(1, canvas.clientHeight), c = CFG().camera;
+    S.cam.az = c.azimuth; S.cam.el = c.elevation; S.cam.target = [...c.target];
+    S.cam.dist = asp < 1 ? Math.min(c.distance / Math.max(asp, 0.45) * 0.9, 24) : c.distance;
   };
   camHome();
   let blockM = M4.id(), invBlockM = M4.id(), gLocal = [0, -G_BODY, 0];
@@ -194,7 +192,7 @@ async function main() {
     camPos = vadd(c.target, [c.dist * ce * Math.sin(c.az), c.dist * Math.sin(c.el), c.dist * ce * Math.cos(c.az)]);
     view = M4.lookAt(camPos, c.target, [0, 1, 0]);
     const asp = W / H;
-    projM = M4.persp(asp < 1 ? 0.62 : 0.56, asp, 0.1, 80);
+    const fov = CFG().camera.fov; projM = M4.persp(asp < 1 ? fov * 1.1 : fov, asp, 0.1, 80);
     viewProj = M4.mul(projM, view); invVP = M4.inv(viewProj);
     camR = [view[0], view[4], view[8]]; camU = [view[1], view[5], view[9]]; camF = [-view[2], -view[6], -view[10]];
   }
@@ -212,8 +210,8 @@ async function main() {
     const side = vdot(sideW, toCam) >= 0 ? 1 : -1;
     const guns = SHIP_INFO.muzzles.filter(m => m.side === side);
     const g = guns[ship.gunIdx++ % guns.length];
-    const mp = ship.toWorld(g.p), dir = vnorm(Q.rot(ship.q, [side, 0.34, 0.05]));
-    const b = freeBody('ball'); b.spawn(mp, vadd(vscale(dir, 4.6), ship.vel)); b.fromShip = 0.25;
+    const B = CFG().sim.bodies, mp = ship.toWorld(g.p), dir = vnorm(Q.rot(ship.q, [side, B.cannonElevation, 0.05]));
+    const b = freeBody('ball'); b.spawn(mp, vadd(vscale(dir, B.cannonSpeed), ship.vel)); b.fromShip = 0.25;
     ship.applyImpulse(vscale(dir, -0.28), ship.toWorld([g.p[0], 0.25, g.p[2]]));
     ship.recoil = 1;
     S.shots++;
@@ -370,6 +368,7 @@ async function main() {
     }
   }
   function simStep(dt) {
+    G_BODY = CFG().sim.bodies.gravity;
     // block tilt springs → sloshing via local gravity
     const tk = 40, tc = 7;
     for (let k = 0; k < 2; k++) {
@@ -380,22 +379,24 @@ async function main() {
     }
     computeBlock();
     // jelly wobble (shear + squash) springs
-    const K = lerp(30, 320, S.firm), C = lerp(1.6, 6, S.firm);
+    const J = CFG().sim.jelly, K = lerp(J.wobbleSoft, J.wobbleFirm, S.firm), C = lerp(1.6, 6, S.firm);
     for (let k = 0; k < 2; k++) { S.shearV[k] += (-K * S.shear[k] - C * S.shearV[k]) * dt; S.shear[k] += S.shearV[k] * dt; }
     S.squashV += (-K * 1.4 * S.squash - C * S.squashV) * dt; S.squash += S.squashV * dt;
-    S.shear = S.shear.map(v => clamp(v, -0.12, 0.12)); S.squash = clamp(S.squash, -0.06, 0.06);
+    S.shear = S.shear.map(v => clamp(v, -J.maxShear, J.maxShear)); S.squash = clamp(S.squash, -0.06, 0.06);
     // wind
-    const wa = 0.28 * Math.sin(S.time * 0.07) + 0.12 * Math.sin(S.time * 0.23 + 1);
-    const wm = 0.32 + 0.08 * Math.sin(S.time * 0.13);
+    const Wd = CFG().sim.wind, Wv = CFG().sim.waves;
+    const wa = Wd.swing * Math.sin(S.time * 0.07) + Wd.swing * 0.43 * Math.sin(S.time * 0.23 + 1);
+    const wm = Wd.strength + Wd.gust * Math.sin(S.time * 0.13);
     S.wind = [Math.sin(wa) * wm, Math.cos(wa) * wm];
     // forces into the water
     if (ptrWater) water.pressure(ptrWater[0], ptrWater[1], 0.11, 0.09);
-    if (!REDUCED && Math.random() < dt * 1.2) water.pressure(rr(-2.4, 2.4), rr(-0.3, 2.4), 0.2, rr(0.01, 0.025));
+    if (!REDUCED && Math.random() < dt * Wv.ambientSwell) water.pressure(rr(-2.4, 2.4), rr(-0.3, 2.4), 0.2, rr(0.01, 0.025));
     ship.step(dt, water, gLocal, S.wind, info.anchorRing);
     for (const b of bodies) stepBody(b, dt);
     collideBodies();
-    const tension = lerp(0.00003, 0.00022, S.firm);
-    water.step(dt, gLocal[0] / G_BODY * G_WAVE, gLocal[2] / G_BODY * G_WAVE, lerp(0.05, 1.6, S.damp), tension);
+    const tension = lerp(Wv.tensionSoft, Wv.tensionFirm, S.firm);
+    water.g = Wv.gravity;
+    water.step(dt, gLocal[0] / G_BODY * water.g, gLocal[2] / G_BODY * water.g, lerp(Wv.dampingMin, Wv.dampingMax, S.damp), tension);
     // palms spring back
     for (const p of palms) {
       const tgt = p.target || [0, 0, 0];
@@ -415,9 +416,10 @@ async function main() {
     S.fireFlick = 0.75 + 0.25 * (0.5 + 0.5 * Math.sin(S.time * 13.1) * Math.sin(S.time * 7.3 + 1)) + (REDUCED ? 0 : 0.1 * Math.sin(S.time * 23));
     const fp = info.fire, boost = 1 + S.roar * 2;
     const rate = (n) => { let k = n * dt * red; let c = Math.floor(k); if (Math.random() < k - c) c++; return c; };
-    for (let i = rate(45 * boost); i--;) parts.emit({ p: vadd(fp, [rr(-.05, .05), rr(-.04, 0), rr(-.05, .05)]), v: [rr(-.06, .06), rr(0.3, 0.55) * (1 + S.roar), rr(-.06, .06)], life: rr(0.35, 0.7), s0: rr(0.05, 0.08) * (1 + S.roar * 0.6), s1: 0.01, c0: [2.2, 1.1, 0.3, 0.9], c1: [1.4, 0.25, 0.05, 0.5], kind: 1, add: 1, drag: 0.8, grav: -0.3 });
-    for (let i = rate(6 * boost); i--;) parts.emit({ p: vadd(fp, [rr(-.04, .04), 0.05, rr(-.04, .04)]), v: [rr(-.15, .15), rr(0.4, 0.9), rr(-.15, .15)], life: rr(1.2, 2.6), s0: rr(0.006, 0.012), s1: 0.003, c0: [3, 1.5, 0.4, 1], c1: [2, 0.4, 0.05, 0.6], kind: 1, add: 1, drag: 0.6, grav: -0.05 });
-    for (let i = rate(7); i--;) parts.emit({ p: vadd(fp, [rr(-.04, .04), 0.18, rr(-.04, .04)]), v: [rr(-.03, .03), rr(0.18, 0.3), rr(-.03, .03)], life: rr(3, 5), s0: rr(0.04, 0.06), s1: rr(0.22, 0.34), c0: [0.42, 0.4, 0.38, 0.32], c1: [0.6, 0.6, 0.6, 0], kind: 0, drag: 0.25, grav: -0.03, lit: 1, rotv: rr(-.5, .5) });
+    const FR = CFG().sim.fire;
+    for (let i = rate(FR.flames * boost); i--;) parts.emit({ p: vadd(fp, [rr(-.05, .05), rr(-.04, 0), rr(-.05, .05)]), v: [rr(-.06, .06), rr(0.3, 0.55) * (1 + S.roar), rr(-.06, .06)], life: rr(0.35, 0.7), s0: rr(0.05, 0.08) * (1 + S.roar * 0.6), s1: 0.01, c0: [2.2, 1.1, 0.3, 0.9], c1: [1.4, 0.25, 0.05, 0.5], kind: 1, add: 1, drag: 0.8, grav: -0.3 });
+    for (let i = rate(FR.embers * boost); i--;) parts.emit({ p: vadd(fp, [rr(-.04, .04), 0.05, rr(-.04, .04)]), v: [rr(-.15, .15), rr(0.4, 0.9), rr(-.15, .15)], life: rr(1.2, 2.6), s0: rr(0.006, 0.012), s1: 0.003, c0: [3, 1.5, 0.4, 1], c1: [2, 0.4, 0.05, 0.6], kind: 1, add: 1, drag: 0.6, grav: -0.05 });
+    for (let i = rate(FR.smoke); i--;) parts.emit({ p: vadd(fp, [rr(-.04, .04), 0.18, rr(-.04, .04)]), v: [rr(-.03, .03), rr(0.18, 0.3), rr(-.03, .03)], life: rr(3, 5), s0: rr(0.04, 0.06), s1: rr(0.22, 0.34), c0: [0.42, 0.4, 0.38, 0.32], c1: [0.6, 0.6, 0.6, 0], kind: 0, drag: 0.25, grav: -0.03, lit: 1, rotv: rr(-.5, .5) });
     // chest glitter
     if (chest.ang > 0.6) for (let i = rate(10); i--;) {
       const c = info.chest.p; parts.emit({ p: vadd(c, [rr(-.1, .1), rr(0.14, 0.2), rr(-.08, .08)]), v: [0, rr(0.05, 0.15), 0], life: rr(0.5, 1.1), s0: rr(0.025, 0.045), s1: 0.0, c0: [2.5, 1.9, 0.8, 1], kind: 2, add: 1, drag: 1, rot: rr(0, 1) });
@@ -444,6 +446,7 @@ async function main() {
     put(NODE.SHIP, Q.mat(ship.q, ship.pos));
     const c = info.chest;
     put(NODE.LID, M4.mul(M4.mul(M4.mul(M4.T(c.p[0], c.p[1], c.p[2]), M4.RY(c.yaw)), M4.T(0, c.h, -c.d / 2)), M4.RX(-chest.ang)));
+    for (let i = 0; i < NODE.NPALM; i++) put(NODE.PALM + i, zero);
     palms.forEach((p, i) => put(NODE.PALM + i, M4.T(...p.base), [p.bend[0], p.bend[1], p.bend[2], p.phase]));
     const links = chainLinks(ship.toWorld(SHIP_INFO.anchorHawse), info.anchorRing, (x, z) => water.ground(x, z), NODE.NCHAIN);
     links.forEach((m, i) => put(NODE.CHAIN + i, m));
@@ -451,7 +454,7 @@ async function main() {
     device.queue.writeBuffer(nodeBuf, 0, nodeF);
   }
   function updateUniforms(D) {
-    const fl = FLAVOURS[S.flavour];
+    const fl = flavourAt(S.flavour);
     UF.set(viewProj, 0);
     // key light: sun by day, moon by night
     const el = D.sunEl * PI / 180, az = D.sunAz * PI / 180;
@@ -617,30 +620,45 @@ async function main() {
     canvas.classList.toggle('pointer', k !== 'orbit');
   }
   addEventListener('keydown', e => {
-    if (e.code === 'Space' && !(e.target instanceof HTMLInputElement) && !(e.target instanceof HTMLButtonElement)) { e.preventDefault(); fireCannon(); }
+    if (e.code === 'Space' && !(e.target instanceof HTMLInputElement) && !(e.target instanceof HTMLButtonElement) && !(e.target instanceof HTMLTextAreaElement)) { e.preventDefault(); fireCannon(); }
   });
 
-  // ── UI ──
-  $('bFire').onclick = () => fireCannon();
-  $('bCoins').onclick = () => dropCoins(5);
-  $('bBarrel').onclick = () => dropBarrel();
-  $('bReset').onclick = () => resetAll();
-  $('bView').onclick = () => camHome();
-  $('bPause').onclick = () => { S.paused = !S.paused; $('bPause').textContent = S.paused ? 'Resume' : 'Pause'; setStatus(S.paused ? 'paused' : 'live', S.paused ? 'WebGPU · paused' : 'WebGPU · live'); };
-  $('flav').querySelectorAll('button').forEach(b => b.onclick = () => { S.flavour = +b.dataset.f; $('flav').querySelectorAll('button').forEach(o => o.setAttribute('aria-pressed', o === b)); });
-  const sl = (id, out, fn) => { const el = $(id); const f = () => fn(+el.value, $(out)); el.addEventListener('input', f); f(); };
-  sl('sFirm', 'oFirm', (v, o) => { S.firm = v / 100; o.textContent = v; });
-  sl('sDamp', 'oDamp', (v, o) => { S.damp = v / 100; o.textContent = v; });
-  if (QS.has('t')) $('sTime').value = Math.round(+QS.get('t') * 1000);
-  sl('sTime', 'oTime', (v, o) => { S.day = v / 1000; o.textContent = dayAt(S.day).name; });
-  $('handle').onclick = () => { const p = $('panel'); p.classList.toggle('open'); $('handle').setAttribute('aria-expanded', p.classList.contains('open')); };
+  // ── UI (panel is generated by the shell from config.panel) ──
+  Object.assign(actions, {
+    fire: () => fireCannon(),
+    coins: () => dropCoins(Math.max(1, Math.round(CFG().sim.bodies.coinsPerDrop))),
+    barrel: () => dropBarrel(),
+    reset: () => resetAll(),
+    view: () => camHome(),
+    pause: () => {
+      S.paused = !S.paused; Shell.buttonLabel('pause', S.paused ? '继续' : '暂停');
+      Shell.status(S.paused ? 'paused' : 'live', S.paused ? 'WebGPU · 已暂停' : 'WebGPU · 实时');
+    },
+  });
+  hooks = {
+    onState(k, v) {
+      if (k === 'flavour') S.flavour = v; else if (k === 'firmness') S.firm = v / 100;
+      else if (k === 'damping') S.damp = v / 100; else if (k === 'day') S.day = v / 1000;
+    },
+    onRebuild(c) {
+      applySceneConfig(c.scene);
+      makeWorld();
+      nodeVB.destroy(); nodeIB.destroy();
+      nodeVB = buf(world.V, GPUBufferUsage.VERTEX); nodeIB = buf(world.I, GPUBufferUsage.INDEX);
+      water.loadTerrain(); ship.reset(); for (const b of bodies) b.alive = false; parts.n = 0;
+      chest.ang = chest.vel = chest.target = 0; chest.open = false;
+      Object.assign(pj, { info, palms });
+    },
+    onConfig(path) { if (path === '*' || path.startsWith('camera')) camHome(); },
+  };
 
   // small console handle for tinkering
   const project = lp => { const c = M4.xp4(viewProj, worldP(lp)), r = canvas.getBoundingClientRect(); return [r.left + (c[0] * 0.5 + 0.5) * r.width, r.top + (0.5 - c[1] * 0.5) * r.height]; };
-  window.pirateJelly = { state: S, ship, water, bodies, info, palms, fire: fireCannon, coins: dropCoins, barrel: dropBarrel, roar, popX, chest, project };
+  const pj = window.pirateJelly = { state: S, ship, water, bodies, info, palms, fire: fireCannon, coins: dropCoins, barrel: dropBarrel, roar, popX, chest, project };
   // ── frame loop ──
   let last = performance.now(), acc = 0, frame = 0, dark = null, vigSm = 0;
-  setStatus('live', 'WebGPU · live');
+  Shell.status('live', 'WebGPU · 实时');
+  if (QS.has('t')) Shell.setState('day', Math.round(+QS.get('t') * 1000));
   function render() {
     resize();
     const now = performance.now();
@@ -704,15 +722,14 @@ async function main() {
       }
       const vig = clamp(Math.sqrt(E / (GN * GN)) * 6 + Math.sqrt(kin) * 0.06 + vlen(ship.vel) * 0.8 + Math.hypot(...S.shear) * 4, 0, 1);
       vigSm = lerp(vigSm, vig, 0.35);
-      $('vig').style.width = (vigSm * 100).toFixed(1) + '%';
-      $('vigV').textContent = vigSm < 0.12 ? 'calm' : vigSm < 0.35 ? 'lively' : vigSm < 0.65 ? 'choppy' : 'tempest';
-      $('cShots').textContent = S.shots; $('cFloat').textContent = afloat; $('cSunk').textContent = sunk;
-      const isDark = D.night > 0.5;
-      if (isDark !== dark) { dark = isDark; document.body.classList.toggle('dark', isDark); }
+      Shell.meter('vigour', vigSm, vigSm < 0.12 ? '平静' : vigSm < 0.35 ? '活跃' : vigSm < 0.65 ? '起伏' : '风暴');
+      Shell.count('shots', S.shots); Shell.count('afloat', afloat); Shell.count('sunk', sunk);
+      const isDark = D.night > CFG().theme.darkAt;
+      if (isDark !== dark) { dark = isDark; Shell.setDark(isDark); }
     }
     if (TEST && frame === (+QS.get('frames') || 90)) { document.title = 'READY'; console.log('[pirate-jelly] test frames done; verts', world.V.length / VSTRIDE, 'tris', world.I.length / 3, 'build', info.buildMs.toFixed(0) + 'ms'); }
     requestAnimationFrame(render);
   }
   requestAnimationFrame(render);
 }
-main().catch(e => { console.error(e); fail('Something went wrong while setting the jelly: ' + e.message); });
+main().catch(e => { console.error(e); fail('果冻凝固时出了点问题：' + e.message); });

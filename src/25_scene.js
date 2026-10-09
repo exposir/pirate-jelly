@@ -1,7 +1,7 @@
 
 // ───────────────────────── scene geometry ─────────────────────────
-const NODE = { STATIC: 0, SHIP: 1, LID: 2, PALM: 3, NPALM: 9, CHAIN: 12, NCHAIN: 26, BALL: 38, NBALL: 16, BARREL: 54, NBARREL: 8, COIN: 62, NCOIN: 30 };
-const NODE_COUNT = 92;
+const NODE = { STATIC: 0, SHIP: 1, LID: 2, PALM: 3, NPALM: 16, CHAIN: 19, NCHAIN: 26, BALL: 45, NBALL: 16, BARREL: 61, NBARREL: 8, COIN: 69, NCOIN: 30 };
+const NODE_COUNT = 100;
 const COL = {
   hullBlack: [0.085, 0.075, 0.07], ochre: [0.78, 0.55, 0.17], red: [0.55, 0.12, 0.08], deck: [0.6, 0.42, 0.25],
   wood: [0.52, 0.33, 0.18], woodD: [0.33, 0.2, 0.11], iron: [0.12, 0.115, 0.11], gold: [1.0, 0.74, 0.25],
@@ -154,6 +154,19 @@ const PALMS = [
   { x: -1.42, z: -1.55, h: 0.75, lean: [-0.25, 0.1] },
 ];
 function palmPath(P, t) { return [P.lean[0] * P.h * t * t, P.h * t, P.lean[1] * P.h * t * t]; }
+// flora counts (configurable)
+const FLORA = { bushes: 22, ferns: 14, grassTufts: 20, shoreRocks: 16, kelpClumps: 8, trappedBubbles: 34, seabedCoins: 7, seed: 4242 };
+
+// pour a config.scene object into the module-level layout tables
+function applySceneConfig(sc) {
+  const I = sc.island, C = sc.camp;
+  Object.assign(LAYOUT, { island: [I.x, I.z, I.radiusX, I.radiusZ], hills: I.hills, cove: I.cove, ship: [...sc.ship], anchor: [...sc.anchor],
+    skull: [sc.skull.x, sc.skull.z, sc.skull.yaw], skullScale: sc.skull.scale, fire: [...C.fire], chest: [...C.chest], xmark: [...C.xmark],
+    shovel: [...C.shovel], rowboat: [...C.rowboat], wreck: [...sc.wreck] });
+  PALMS.length = 0;
+  for (const P of sc.palms.slice(0, NODE.NPALM)) PALMS.push({ x: P.x, z: P.z, h: P.height, lean: [...P.lean] });
+  Object.assign(FLORA, sc.flora);
+}
 function buildPalm(b, P, idx) {
   b.node = NODE.PALM + idx;
   const lc = hexc(0xc98a3e), dc = hexc(0x8e5524);
@@ -277,15 +290,16 @@ function buildCamp(b, info) {
     b.push().c(COL.woodD).t(0, 0.37, 0).rz(PI / 2).t(0, -0.035, 0).cyl(0.007, 0.007, 0.07, 6).pop();
     b.pop(); }
   // barrels, crates, cannonball pile
-  for (const [x, z, lying, rot] of [[1.38, -1.06, 0, 0], [1.5, -0.95, 0, 1], [1.33, -0.88, 1, 0.4]]) {
-    const y = T0(x, z);
+  const [kx, kz] = LAYOUT.chest;   // stores are stacked beside the chest
+  for (const [dx, dz, lying, rot] of [[0.4, 0.12, 0, 0], [0.52, 0.23, 0, 1], [0.35, 0.3, 1, 0.4]]) {
+    const x = kx + dx, z = kz + dz, y = T0(x, z);
     b.push().t(x, y + (lying ? 0.06 : 0.09), z).ry(rot); if (lying) b.rz(PI / 2); barrelGeo(b); b.pop();
   }
-  for (const [x, z, s, rot, st] of [[1.55, -1.25, 0.16, 0.3, 0], [1.42, -1.38, 0.14, 0.9, 0], [1.52, -1.27, 0.11, 0.1, 1]]) {
-    const y = T0(x, z) + (st ? 0.16 : 0);
+  for (const [dx, dz, s, rot, st] of [[0.57, -0.07, 0.16, 0.3, 0], [0.44, -0.2, 0.14, 0.9, 0], [0.54, -0.09, 0.11, 0.1, 1]]) {
+    const x = kx + dx, z = kz + dz, y = T0(x, z) + (st ? 0.16 : 0);
     b.push().t(x, y + s / 2 - 0.01, z).ry(rot); crateGeo(b, s); b.pop();
   }
-  { const [px, pz] = [1.12, -0.9], py = T0(px, pz), r = 0.034;
+  { const [px, pz] = [kx + 0.14, kz + 0.28], py = T0(px, pz), r = 0.034;
     b.push().m(1).c(COL.iron);
     for (let L = 0; L < 3; L++) for (let i = 0; i < 3 - L; i++) for (let j = 0; j < 3 - L; j++)
       b.push().t(px + (i - (2 - L) / 2) * 2 * r, py + r + L * r * 1.45, pz + (j - (2 - L) / 2) * 2 * r).sphere(r, r, r, 9, 6).pop();
@@ -305,15 +319,15 @@ function buildCamp(b, info) {
 
 function buildIslandFlora(b, info) {
   b.node = 0;
-  _seed = 4242;
+  _seed = Math.max(1, Math.floor(FLORA.seed)) || 4242;
   const onIsland = (x, z) => T0(x, z);
   const nearCamp = (x, z) => Math.hypot(x - LAYOUT.fire[0], z - LAYOUT.fire[1]) < 0.5 || Math.hypot(x - LAYOUT.chest[0], z - LAYOUT.chest[1]) < 0.3
-    || Math.hypot(x - LAYOUT.xmark[0], z - LAYOUT.xmark[1]) < 0.25 || Math.hypot(x - 1.4, z + 1.1) < 0.3 || Math.hypot(x - LAYOUT.rowboat[0], z - LAYOUT.rowboat[1]) < 0.3;
+    || Math.hypot(x - LAYOUT.xmark[0], z - LAYOUT.xmark[1]) < 0.25 || Math.hypot(x - LAYOUT.chest[0] - 0.42, z - LAYOUT.chest[1] - 0.08) < 0.3 || Math.hypot(x - LAYOUT.rowboat[0], z - LAYOUT.rowboat[1]) < 0.3;
   const sample = (n, ok) => { const out = []; let guard = 0; while (out.length < n && guard++ < 6000) { const x = rr(-2.2, 2.5), z = rr(-2.55, -0.5), y = onIsland(x, z); if (ok(x, z, y) && !nearCamp(x, z)) out.push([x, y, z]); } return out; };
   info.bushes = [];
   // jelly bushes with flowers
   const greens = [0x2f9a48, 0x48b85a, 0x1f7d3f, 0x5cc46a];
-  for (const [x, y, z] of sample(22, (x, z, y) => y > WL + 0.2)) {
+  for (const [x, y, z] of sample(FLORA.bushes, (x, z, y) => y > WL + 0.2)) {
     const n = 3 + Math.floor(rnd() * 3), base = hexc(greens[Math.floor(rnd() * 4)]);
     for (let i = 0; i < n; i++) {
       const r = rr(0.06, 0.12), ox = rr(-0.1, 0.1), oz = rr(-0.1, 0.1);
@@ -324,7 +338,7 @@ function buildIslandFlora(b, info) {
     info.bushes.push([x, y + 0.15, z]);
   }
   // ferns
-  for (const [x, y, z] of sample(14, (x, z, y) => y > WL + 0.16)) {
+  for (const [x, y, z] of sample(FLORA.ferns, (x, z, y) => y > WL + 0.16)) {
     for (let k = 0; k < 6; k++) {
       const a = k / 6 * TAU + rnd(), dir = [Math.cos(a), 0, Math.sin(a)], side = [-dir[2], 0, dir[0]], L = rr(0.14, 0.2);
       b.push().m(2).surf(4, 8, (xx, s) => {
@@ -334,7 +348,7 @@ function buildIslandFlora(b, info) {
     }
   }
   // beach grass tufts
-  for (const [x, y, z] of sample(20, (x, z, y) => y > WL + 0.05 && y < WL + 0.22)) {
+  for (const [x, y, z] of sample(FLORA.grassTufts, (x, z, y) => y > WL + 0.05 && y < WL + 0.22)) {
     for (let k = 0; k < 7; k++) {
       const a = rnd() * TAU, lean = rr(0.15, 0.5), H = rr(0.08, 0.15), dir = [Math.cos(a), 0, Math.sin(a)], side = [-dir[2], 0, dir[0]];
       b.push().m(2).surf(1, 5, (xx, s) => {
@@ -345,7 +359,7 @@ function buildIslandFlora(b, info) {
   }
   // shore rocks
   info.rocks = [];
-  for (const [x, y, z] of sample(16, (x, z, y) => Math.abs(y - WL) < 0.07)) {
+  for (const [x, y, z] of sample(FLORA.shoreRocks, (x, z, y) => Math.abs(y - WL) < 0.07)) {
     const r = rr(0.05, 0.11); b.push().t(x, y + r * 0.2, z).ry(rnd() * TAU); rock(b, r, rnd() * 50); b.pop();
     info.rocks.push({ c: [x, y + r * 0.2, z], r: r * 0.85 });
   }
@@ -354,7 +368,7 @@ function buildIslandFlora(b, info) {
 function buildSkull(b, info) {
   b.node = 0;
   const [sx, sz, yaw] = LAYOUT.skull, sy = T0(sx, sz) - 0.08;
-  const SK = 1.28;
+  const SK = LAYOUT.skullScale;
   info.skull = { p: [sx, sy, sz], yaw, s: SK };
   const { P, I } = surfaceNets((x, y, z) => skullSDF(x, y, z), [-0.78, -0.12, -0.7], [0.78, 1.32, 0.72], [70, 64, 64]);
   const M = M4.mul(M4.mul(M4.T(sx, sy, sz), M4.RY(yaw)), M4.S(SK));
@@ -397,7 +411,7 @@ function buildSkull(b, info) {
 
 function buildSeabed(b, info) {
   b.node = 0;
-  _seed = 777;
+  _seed = 777 + (Math.floor(FLORA.seed) % 1000);
   // wreck — fore half of a ship on her side
   const [wx, wz] = LAYOUT.wreck, wy = T0(wx, wz);
   b.push().t(wx, wy + 0.17, wz).ry(-0.6).rz(1.25).s(0.9);
@@ -421,7 +435,8 @@ function buildSeabed(b, info) {
   b.push().c(hexc(0x5f4a33)).t(wx - 0.35, T0(wx - 0.35, wz + 0.15) + 0.02, wz + 0.15).ry(-0.9).rz(PI / 2).t(0, -0.25, 0).cyl(0.012, 0.012, 0.5, 6).pop();
   info.wreck = [{ c: [wx, wy + 0.15, wz], r: 0.3 }, { c: [wx - 0.25, wy + 0.12, wz - 0.2], r: 0.22 }, { c: [wx + 0.25, wy + 0.12, wz + 0.2], r: 0.22 }];
   // kelp
-  const kelpSpots = [[1.9, 0.3], [0.55, 1.95], [-1.65, 1.6], [2.05, 1.85], [-2.1, 0.4], [1.0, 0.25], [-0.9, 1.9], [2.2, -0.4]];
+  const kelpSpots = [[1.9, 0.3], [0.55, 1.95], [-1.65, 1.6], [2.05, 1.85], [-2.1, 0.4], [1.0, 0.25], [-0.9, 1.9], [2.2, -0.4]].slice(0, FLORA.kelpClumps);
+  while (kelpSpots.length < FLORA.kelpClumps) { const x = rr(-2.3, 2.3), z = rr(-0.2, 2.3); if (T0(x, z) < WL - 0.3) kelpSpots.push([x, z]); }
   for (const [kx, kz] of kelpSpots) for (let s = 0; s < 4; s++) {
     const x = kx + rr(-0.12, 0.12), z = kz + rr(-0.12, 0.12), y0 = T0(x, z), H = (WL - 0.1 - y0) * rr(0.6, 0.95), ph = rnd() * 6;
     const k0 = hexc(0x5d7a22), k1 = hexc(0xb7c74a);
@@ -431,12 +446,12 @@ function buildSeabed(b, info) {
     }, { col: (xx, t) => vlerp(k0, k1, t), w: (xx, t) => 1 + t * 1.6 }).pop();
   }
   // doubloons on the floor
-  for (let i = 0; i < 7; i++) {
+  for (let i = 0; i < FLORA.seabedCoins; i++) {
     const x = wx + rr(-0.6, 0.4), z = wz + rr(-0.5, 0.45), y = T0(x, z);
     b.push().t(x, y + 0.004, z).rx(rr(-0.15, 0.15)).rz(rr(-0.15, 0.15)); coinGeo(b, 0.035); b.pop();
   }
   // bubbles trapped in the jelly
-  for (let i = 0; i < 34; i++) {
+  for (let i = 0; i < FLORA.trappedBubbles; i++) {
     const x = rr(-2.4, 2.4), z = rr(-0.3, 2.4), y0 = T0(x, z); if (y0 > WL - 0.15) continue;
     const r = rr(0.006, 0.026), y = rr(y0 + 0.05, WL - 0.06);
     b.push().m(9).c([0.9, 0.97, 1]).t(x, y, z).sphere(r, r, r, 8, 6).pop();

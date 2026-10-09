@@ -1,10 +1,11 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Pirate Jelly — Material Studies</title>
-<meta name="description" content="An interactive WebGPU jelly diorama: a translucent ocean block with a tropical island, Skull Rock and an anchored pirate ship. Everything procedural.">
+<title>材料研究</title>
+<meta name="description" content="材料研究系列 · 可配置的 WebGPU 交互作品模板。">
+<style id="theme-vars"></style>
 <style>
 :root{
   --bg:#ece6dc; --ink:#1d1a16; --ink2:#5d554b; --ink3:#8b8276;
@@ -111,67 +112,59 @@ body.na #panel,body.na #howto{display:none}
 @media (prefers-reduced-motion:reduce){
   *{transition:none!important;animation:none!important}
 }
+
+.ui-btn{display:inline-flex;align-items:center;gap:6px;margin:10px 0 0 8px;padding:6px 11px;border-radius:99px;background:var(--pill);border:1px solid var(--glass-b);
+  font:600 10.5px/1 var(--mono);letter-spacing:.12em;color:var(--ink2);cursor:pointer;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);pointer-events:auto;flex:none;width:auto}
+.ui-btn:hover{color:var(--ink);background:var(--pill)}
+#masthead .tools{display:flex;align-items:center;flex-wrap:wrap}
+#masthead .tools *{pointer-events:auto}
+#masthead #status{margin-top:10px}
+/* ── config editor ── */
+#editor{position:fixed;z-index:4;left:0;top:0;bottom:0;width:400px;max-width:100%;display:flex;flex-direction:column;
+  background:var(--glass);border-right:1px solid var(--glass-b);box-shadow:var(--shadow);backdrop-filter:blur(22px) saturate(1.3);-webkit-backdrop-filter:blur(22px) saturate(1.3);
+  transform:translateX(-102%);transition:transform .35s cubic-bezier(.2,.8,.2,1),background .8s;color:var(--ink)}
+#editor.open{transform:none}
+#editor header{padding:18px 18px 10px;border-bottom:1px solid var(--glass-b)}
+#editor header h2{font:400 26px/1 var(--serif);font-style:italic;margin:8px 0 6px;display:flex;justify-content:space-between;align-items:center}
+#editor header p{margin:0;font:500 11px/1.5 var(--mono);color:var(--ink3)}
+#editor .edbar{display:flex;flex-wrap:wrap;gap:6px;padding:10px 18px;border-bottom:1px solid var(--glass-b)}
+#editor .edbar button{flex:1 1 auto;padding:7px 8px;font-size:11px}
+#editor .tabs{display:flex;gap:4px;padding:8px 18px 0}
+#editor .tabs button{flex:none;border-radius:8px 8px 0 0;border-bottom:0;padding:7px 12px;font-size:11px}
+#editor .tabs button[aria-selected=true]{background:var(--track);border-color:var(--track)}
+#editor .body{flex:1;overflow:auto;padding:6px 18px 30px}
+#editor .body::-webkit-scrollbar{width:6px}#editor .body::-webkit-scrollbar-thumb{background:var(--track);border-radius:6px}
+#editor details{border-bottom:1px solid var(--glass-b);padding:2px 0}
+#editor details details{border:0;border-left:1px solid var(--glass-b);margin-left:2px;padding-left:10px}
+#editor summary{cursor:pointer;list-style:none;padding:9px 0 7px;font:600 11px/1.2 var(--mono);letter-spacing:.08em;color:var(--ink2);display:flex;align-items:center;gap:8px}
+#editor summary::-webkit-details-marker{display:none}
+#editor summary::before{content:'▸';font-size:9px;color:var(--ink3);transition:transform .15s}
+#editor details[open]>summary::before{transform:rotate(90deg)}
+#editor summary small{color:var(--ink3);font-weight:500;letter-spacing:0}
+#editor summary .rm{margin-left:auto;flex:none;padding:2px 7px;border-radius:6px;font-size:11px}
+#editor .f{display:grid;grid-template-columns:118px 1fr;align-items:center;gap:8px;padding:4px 0}
+#editor .f>label{font:500 11px/1.25 var(--mono);color:var(--ink3);overflow:hidden;text-overflow:ellipsis}
+#editor .f.wide{grid-template-columns:1fr}
+#editor input[type=text],#editor input[type=number],#editor textarea{width:100%;min-width:0;padding:6px 8px;border-radius:8px;border:1px solid var(--track);
+  background:transparent;color:var(--ink);font:500 12px/1.35 var(--mono)}
+#editor textarea{resize:vertical;min-height:54px;font-family:var(--sans)}
+#editor .vec{display:flex;gap:4px}
+#editor .col{display:flex;gap:6px;align-items:center}
+#editor input[type=color]{width:34px;height:28px;padding:0;border:1px solid var(--track);border-radius:8px;background:none;cursor:pointer;flex:none}
+#editor .add{width:100%;margin:6px 0 8px;padding:6px;font-size:11px;border-style:dashed}
+#editor .rebuild{font:600 9px/1 var(--mono);letter-spacing:.1em;color:var(--accent);border:1px solid currentColor;border-radius:5px;padding:2px 4px}
+#editor #json{width:100%;height:calc(100% - 50px);min-height:300px;font:500 11.5px/1.45 var(--mono);white-space:pre;tab-size:2}
+#editor .jsonbar{display:flex;gap:6px;margin:8px 0}
+#editor .msg{font:500 11px/1.4 var(--mono);color:var(--accent);min-height:1.4em;padding:4px 18px 10px}
+@media (max-width:760px){#editor{width:100%;top:auto;height:82vh;border-radius:18px 18px 0 0;transform:translateY(102%)}#editor.open{transform:none}}
 </style>
 </head>
 <body>
-<canvas id="gl" tabindex="0" aria-label="Interactive pirate jelly diorama"></canvas>
-
-<header id="masthead" class="ui">
-  <div class="eyebrow"><i></i>Material Studies · Nº 07</div>
-  <h1><span>Pirate</span><span><em>Jelly.</em></span></h1>
-  <p class="lede">A wobbling block of lagoon gelatin with a castaway island inside — Skull Rock, a buried chest and a brig riding at anchor. Shallow-water waves, buoyancy and cannon fire, all simulated live.</p>
-  <div id="status"><b></b><span>WebGPU · starting</span></div>
-</header>
-
-<aside id="panel" class="ui" aria-label="Controls">
-  <button class="handle" id="handle" aria-expanded="false"><i></i><span>Controls</span></button>
-  <section class="sec">
-    <h2>The Cove <small>Actions</small></h2>
-    <div class="row">
-      <button id="bFire" class="primary">Fire a shot</button>
-    </div>
-    <div class="row" style="margin-top:6px">
-      <button id="bCoins">Doubloons</button>
-      <button id="bBarrel">Barrel</button>
-    </div>
-    <div class="meter"><div class="lbl"><span>Vigour</span><span id="vigV">calm</span></div><div class="bar"><i id="vig"></i></div></div>
-    <div class="counts">
-      <div><b id="cShots">0</b>shots</div>
-      <div><b id="cFloat">0</b>afloat</div>
-      <div><b id="cSunk">0</b>sunk</div>
-    </div>
-  </section>
-  <section class="sec">
-    <h2>Flavour <small>Jelly</small></h2>
-    <div class="flav" id="flav">
-      <button data-f="0" aria-pressed="true"><i style="background:#3cb7ad"></i>Lagoon</button>
-      <button data-f="1" aria-pressed="false"><i style="background:#d9902e"></i>Rum</button>
-      <button data-f="2" aria-pressed="false"><i style="background:#7a4bb3"></i>Kraken</button>
-    </div>
-    <div class="slider"><div class="lbl"><span>Firmness</span><output id="oFirm">62</output></div><input id="sFirm" type="range" min="0" max="100" value="62" aria-label="Firmness"></div>
-    <div class="slider"><div class="lbl"><span>Wave damping</span><output id="oDamp">30</output></div><input id="sDamp" type="range" min="0" max="100" value="30" aria-label="Wave damping"></div>
-    <div class="slider"><div class="lbl"><span>Time of day</span><output id="oTime">Noon</output></div><input id="sTime" type="range" min="0" max="1000" value="80" aria-label="Time of day"></div>
-  </section>
-  <section class="sec">
-    <div class="row">
-      <button id="bReset">Reset</button>
-      <button id="bPause">Pause</button>
-      <button id="bView">Reset view</button>
-    </div>
-  </section>
-</aside>
-
-<footer id="howto" class="ui">
-  <div class="line">How to play — click the ship to fire, <kbd>Space</kbd> for a broadside.</div>
-  <p>Drag the ship against its anchor · click the chest, campfire or the X · drag water to make waves · drag a side of the block to tilt it · grab &amp; throw balls, barrels, coins · drag a palm to bend it · drag empty space or right-drag to orbit · wheel / pinch to zoom</p>
-</footer>
-
-<div id="fallback"><div class="card">
-  <div class="eyebrow"><i></i>Material Studies · Nº 07</div>
-  <h3>The jelly won't set.</h3>
-  <p id="fbMsg">This study renders with <b>WebGPU</b>, which isn't available in this browser or on this GPU adapter.</p>
-  <p>Try a recent Chrome, Edge or Safari 26+, or enable WebGPU in your browser flags (e.g. <code>chrome://flags/#enable-unsafe-webgpu</code>).</p>
-</div></div>
-
+<canvas id="gl" tabindex="0" aria-label="交互场景"></canvas>
+<header id="masthead" class="ui"></header>
+<aside id="panel" class="ui" aria-label="控制面板"></aside>
+<footer id="howto" class="ui"></footer>
+<aside id="editor" aria-label="配置编辑器"></aside>
+<div id="fallback"><div class="card"></div></div>
 <script type="module">
 "use strict";

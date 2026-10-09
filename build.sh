@@ -1,5 +1,10 @@
 #!/bin/sh
-# 拼接分段源文件为单个 index.html
+# Build the single-file pages from src/.
+#   studio/index.html  — Pirate Jelly on the configurable series shell (Chinese UI + live editor)
+#   starter/index.html — blank series template (shell + minimal scene) to start a new study
+# The root index.html is the frozen original v1 and is not rebuilt.
 cd "$(dirname "$0")"
-cat src/00_head.html src/10_math.js src/20_geo.js src/25_scene.js src/30_shaders.js src/40_sim.js src/50_main.js src/99_tail.html > index.html
-echo "built index.html ($(wc -c < index.html) bytes)"
+mkdir -p studio starter
+cat src/00_head.html src/05_shell.js src/06_config_pirate.js src/10_math.js src/20_geo.js src/25_scene.js src/30_shaders.js src/40_sim.js src/50_main.js src/99_tail.html > studio/index.html
+cat src/00_head.html src/05_shell.js src/starter/06_config.js src/starter/50_main.js src/99_tail.html > starter/index.html
+echo "built studio/index.html ($(wc -c < studio/index.html) bytes), starter/index.html ($(wc -c < starter/index.html) bytes)"

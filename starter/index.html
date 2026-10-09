@@ -1,0 +1,550 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>材料研究</title>
+<meta name="description" content="材料研究系列 · 可配置的 WebGPU 交互作品模板。">
+<style id="theme-vars"></style>
+<style>
+:root{
+  --bg:#ece6dc; --ink:#1d1a16; --ink2:#5d554b; --ink3:#8b8276;
+  --glass:rgba(250,247,241,.62); --glass-b:rgba(29,26,22,.10);
+  --accent:#c2562b; --accent2:#2a8c86; --track:rgba(29,26,22,.14);
+  --pill:rgba(250,247,241,.75); --shadow:0 18px 50px -20px rgba(60,40,20,.35);
+  --serif:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,"Times New Roman",serif;
+  --sans:ui-sans-serif,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+}
+body.dark{
+  --bg:#0f1424; --ink:#efe7da; --ink2:#b9b0a3; --ink3:#857d72;
+  --glass:rgba(20,24,40,.58); --glass-b:rgba(239,231,218,.12);
+  --accent:#f0a050; --accent2:#5fd0c4; --track:rgba(239,231,218,.18);
+  --pill:rgba(20,24,40,.7); --shadow:0 18px 50px -20px rgba(0,0,0,.7);
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--ink);font-family:var(--sans);
+  -webkit-font-smoothing:antialiased;transition:background-color .8s,color .8s}
+canvas#gl{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;cursor:grab;outline:none}
+canvas#gl.grabbing{cursor:grabbing}
+canvas#gl.pointer{cursor:pointer}
+.ui{position:fixed;z-index:2;pointer-events:none}
+.ui *{pointer-events:auto}
+#masthead{left:28px;top:24px;max-width:340px;pointer-events:none}
+#masthead *{pointer-events:none}
+.eyebrow{font:600 10.5px/1 var(--mono);letter-spacing:.22em;text-transform:uppercase;color:var(--ink2);display:flex;gap:10px;align-items:center}
+.eyebrow i{display:inline-block;width:22px;height:1px;background:currentColor;opacity:.6}
+h1{font-family:var(--serif);font-style:italic;font-weight:400;font-size:64px;line-height:.9;letter-spacing:-.02em;margin:14px 0 14px}
+h1 span{display:block}
+h1 em{font-style:italic;color:var(--accent)}
+.lede{font-family:var(--serif);font-size:15px;line-height:1.45;color:var(--ink2);margin:0;max-width:300px}
+#status{display:inline-flex;align-items:center;gap:8px;margin-top:16px;padding:6px 11px 6px 9px;border-radius:99px;background:var(--pill);
+  border:1px solid var(--glass-b);font:600 10.5px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--ink2);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);pointer-events:none}
+#status b{width:7px;height:7px;border-radius:50%;background:#9a9186}
+#status.live b{background:#3bb273;box-shadow:0 0 0 3px rgba(59,178,115,.18);animation:pulse 2.4s infinite}
+#status.paused b{background:#e0a33a}
+#status.na b{background:#d0473a}
+@keyframes pulse{50%{box-shadow:0 0 0 6px rgba(59,178,115,0)}}
+
+#panel{right:20px;top:20px;width:272px;max-height:calc(100% - 40px);overflow:auto;padding:18px 18px 16px;border-radius:18px;
+  background:var(--glass);border:1px solid var(--glass-b);box-shadow:var(--shadow);
+  backdrop-filter:blur(18px) saturate(1.3);-webkit-backdrop-filter:blur(18px) saturate(1.3);transition:background .8s,border-color .8s}
+#panel::-webkit-scrollbar{width:0}
+.handle{display:none}
+.sec{padding:2px 0 14px;margin-bottom:12px;border-bottom:1px solid var(--glass-b)}
+.sec:last-child{border-bottom:0;margin-bottom:0;padding-bottom:0}
+.sec h2{font-family:var(--serif);font-style:italic;font-weight:400;font-size:22px;margin:0 0 10px;display:flex;justify-content:space-between;align-items:baseline}
+.sec h2 small{font:600 9.5px/1 var(--mono);letter-spacing:.18em;text-transform:uppercase;color:var(--ink3);font-style:normal}
+.row{display:flex;gap:6px}
+button{font:600 11.5px/1 var(--sans);letter-spacing:.02em;color:var(--ink);background:transparent;border:1px solid var(--track);
+  border-radius:10px;padding:9px 8px;cursor:pointer;flex:1;transition:background .15s,border-color .15s,transform .08s;white-space:nowrap}
+button:hover{background:var(--track)}
+button:active{transform:translateY(1px)}
+button.primary{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+button.primary:hover{opacity:.88;background:var(--ink)}
+button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.meter{margin:12px 0 8px}
+.meter .lbl{display:flex;justify-content:space-between;font:600 9.5px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--ink3);margin-bottom:6px}
+.bar{height:6px;border-radius:6px;background:var(--track);overflow:hidden}
+.bar i{display:block;height:100%;width:0;border-radius:6px;background:linear-gradient(90deg,var(--accent2),var(--accent));transition:width .15s}
+.counts{display:flex;justify-content:space-between;font:500 11px/1.2 var(--mono);color:var(--ink2);margin-top:10px}
+.counts b{display:block;font:400 22px/1 var(--serif);font-style:italic;color:var(--ink);margin-bottom:3px}
+.counts div{flex:1}
+.counts div+div{border-left:1px solid var(--glass-b);padding-left:10px}
+.flav{display:flex;gap:6px}
+.flav button{display:flex;flex-direction:column;align-items:center;gap:6px;padding:9px 4px 8px}
+.flav button i{width:26px;height:26px;border-radius:50%;box-shadow:inset 0 -4px 8px rgba(0,0,0,.25),inset 0 3px 6px rgba(255,255,255,.5)}
+.flav button[aria-pressed=true]{border-color:var(--ink);background:var(--track)}
+.slider{margin-top:12px}
+.slider .lbl{display:flex;justify-content:space-between;font:600 9.5px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--ink3);margin-bottom:6px}
+.slider .lbl output{color:var(--ink2)}
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:18px;background:transparent;margin:0;cursor:pointer}
+input[type=range]::-webkit-slider-runnable-track{height:4px;border-radius:4px;background:var(--track)}
+input[type=range]::-moz-range-track{height:4px;border-radius:4px;background:var(--track)}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:var(--ink);margin-top:-6px;border:3px solid var(--bg);box-shadow:0 1px 4px rgba(0,0,0,.3)}
+input[type=range]::-moz-range-thumb{width:12px;height:12px;border-radius:50%;background:var(--ink);border:3px solid var(--bg)}
+#howto{left:28px;bottom:22px;max-width:520px;pointer-events:none}
+#howto *{pointer-events:none}
+#howto .line{font-family:var(--serif);font-style:italic;font-size:17px;color:var(--ink)}
+#howto .line kbd{font:600 10px/1 var(--mono);font-style:normal;border:1px solid var(--track);border-radius:5px;padding:2px 5px;margin:0 2px;color:var(--ink2);vertical-align:2px}
+#howto p{margin:5px 0 0;font:500 11px/1.55 var(--mono);color:var(--ink3);letter-spacing:.01em}
+#fallback{position:fixed;inset:0;z-index:5;display:none;align-items:center;justify-content:center;padding:24px;background:var(--bg)}
+#fallback .card{max-width:440px;padding:32px 30px;border-radius:20px;background:var(--glass);border:1px solid var(--glass-b);box-shadow:var(--shadow)}
+#fallback h3{font-family:var(--serif);font-style:italic;font-weight:400;font-size:38px;margin:12px 0 10px;line-height:1}
+#fallback p{font-family:var(--serif);font-size:15.5px;line-height:1.5;color:var(--ink2);margin:0 0 10px}
+#fallback code{font:500 12px var(--mono);background:var(--track);padding:2px 5px;border-radius:4px}
+body.na #fallback{display:flex}
+body.na #panel,body.na #howto{display:none}
+@media (max-width:760px){
+  #masthead{left:18px;top:16px;max-width:70%}
+  h1{font-size:42px;margin:10px 0 8px}
+  .lede{display:none}
+  #status{margin-top:8px}
+  #howto{display:none}
+  #panel{left:0;right:0;top:auto;bottom:0;width:auto;max-height:62vh;border-radius:18px 18px 0 0;padding:6px 18px calc(14px + env(safe-area-inset-bottom));
+    transform:translateY(calc(100% - 134px));transition:transform .35s cubic-bezier(.2,.8,.2,1),background .8s}
+  #panel.open{transform:none}
+  .handle{display:flex;flex-direction:column;align-items:center;gap:6px;padding:6px 0 10px;cursor:pointer;border:0;width:100%;background:none}
+  .handle i{width:40px;height:4px;border-radius:4px;background:var(--track)}
+  .handle span{font:600 9.5px/1 var(--mono);letter-spacing:.18em;text-transform:uppercase;color:var(--ink3)}
+}
+@media (prefers-reduced-motion:reduce){
+  *{transition:none!important;animation:none!important}
+}
+
+.ui-btn{display:inline-flex;align-items:center;gap:6px;margin:10px 0 0 8px;padding:6px 11px;border-radius:99px;background:var(--pill);border:1px solid var(--glass-b);
+  font:600 10.5px/1 var(--mono);letter-spacing:.12em;color:var(--ink2);cursor:pointer;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);pointer-events:auto;flex:none;width:auto}
+.ui-btn:hover{color:var(--ink);background:var(--pill)}
+#masthead .tools{display:flex;align-items:center;flex-wrap:wrap}
+#masthead .tools *{pointer-events:auto}
+#masthead #status{margin-top:10px}
+/* ── config editor ── */
+#editor{position:fixed;z-index:4;left:0;top:0;bottom:0;width:400px;max-width:100%;display:flex;flex-direction:column;
+  background:var(--glass);border-right:1px solid var(--glass-b);box-shadow:var(--shadow);backdrop-filter:blur(22px) saturate(1.3);-webkit-backdrop-filter:blur(22px) saturate(1.3);
+  transform:translateX(-102%);transition:transform .35s cubic-bezier(.2,.8,.2,1),background .8s;color:var(--ink)}
+#editor.open{transform:none}
+#editor header{padding:18px 18px 10px;border-bottom:1px solid var(--glass-b)}
+#editor header h2{font:400 26px/1 var(--serif);font-style:italic;margin:8px 0 6px;display:flex;justify-content:space-between;align-items:center}
+#editor header p{margin:0;font:500 11px/1.5 var(--mono);color:var(--ink3)}
+#editor .edbar{display:flex;flex-wrap:wrap;gap:6px;padding:10px 18px;border-bottom:1px solid var(--glass-b)}
+#editor .edbar button{flex:1 1 auto;padding:7px 8px;font-size:11px}
+#editor .tabs{display:flex;gap:4px;padding:8px 18px 0}
+#editor .tabs button{flex:none;border-radius:8px 8px 0 0;border-bottom:0;padding:7px 12px;font-size:11px}
+#editor .tabs button[aria-selected=true]{background:var(--track);border-color:var(--track)}
+#editor .body{flex:1;overflow:auto;padding:6px 18px 30px}
+#editor .body::-webkit-scrollbar{width:6px}#editor .body::-webkit-scrollbar-thumb{background:var(--track);border-radius:6px}
+#editor details{border-bottom:1px solid var(--glass-b);padding:2px 0}
+#editor details details{border:0;border-left:1px solid var(--glass-b);margin-left:2px;padding-left:10px}
+#editor summary{cursor:pointer;list-style:none;padding:9px 0 7px;font:600 11px/1.2 var(--mono);letter-spacing:.08em;color:var(--ink2);display:flex;align-items:center;gap:8px}
+#editor summary::-webkit-details-marker{display:none}
+#editor summary::before{content:'▸';font-size:9px;color:var(--ink3);transition:transform .15s}
+#editor details[open]>summary::before{transform:rotate(90deg)}
+#editor summary small{color:var(--ink3);font-weight:500;letter-spacing:0}
+#editor summary .rm{margin-left:auto;flex:none;padding:2px 7px;border-radius:6px;font-size:11px}
+#editor .f{display:grid;grid-template-columns:118px 1fr;align-items:center;gap:8px;padding:4px 0}
+#editor .f>label{font:500 11px/1.25 var(--mono);color:var(--ink3);overflow:hidden;text-overflow:ellipsis}
+#editor .f.wide{grid-template-columns:1fr}
+#editor input[type=text],#editor input[type=number],#editor textarea{width:100%;min-width:0;padding:6px 8px;border-radius:8px;border:1px solid var(--track);
+  background:transparent;color:var(--ink);font:500 12px/1.35 var(--mono)}
+#editor textarea{resize:vertical;min-height:54px;font-family:var(--sans)}
+#editor .vec{display:flex;gap:4px}
+#editor .col{display:flex;gap:6px;align-items:center}
+#editor input[type=color]{width:34px;height:28px;padding:0;border:1px solid var(--track);border-radius:8px;background:none;cursor:pointer;flex:none}
+#editor .add{width:100%;margin:6px 0 8px;padding:6px;font-size:11px;border-style:dashed}
+#editor .rebuild{font:600 9px/1 var(--mono);letter-spacing:.1em;color:var(--accent);border:1px solid currentColor;border-radius:5px;padding:2px 4px}
+#editor #json{width:100%;height:calc(100% - 50px);min-height:300px;font:500 11.5px/1.45 var(--mono);white-space:pre;tab-size:2}
+#editor .jsonbar{display:flex;gap:6px;margin:8px 0}
+#editor .msg{font:500 11px/1.4 var(--mono);color:var(--accent);min-height:1.4em;padding:4px 18px 10px}
+@media (max-width:760px){#editor{width:100%;top:auto;height:82vh;border-radius:18px 18px 0 0;transform:translateY(102%)}#editor.open{transform:none}}
+</style>
+</head>
+<body>
+<canvas id="gl" tabindex="0" aria-label="交互场景"></canvas>
+<header id="masthead" class="ui"></header>
+<aside id="panel" class="ui" aria-label="控制面板"></aside>
+<footer id="howto" class="ui"></footer>
+<aside id="editor" aria-label="配置编辑器"></aside>
+<div id="fallback"><div class="card"></div></div>
+<script type="module">
+"use strict";
+
+// ───────────────────────── Material Studies · shell ─────────────────────────
+// A config-driven page shell shared by every study: masthead, status pill, glass control
+// panel, how-to footer, fallback card, light/dark theme and a live configuration editor.
+// A study supplies DEFAULT_CONFIG plus actions / formatters / hooks via Shell.mount().
+const Shell = (() => {
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const clone = o => JSON.parse(JSON.stringify(o));
+  const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+  const isHex = v => typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v);
+  function merge(base, over) {                     // deep merge; arrays are replaced wholesale
+    if (over === undefined) return clone(base);
+    if (!isObj(base) || !isObj(over)) return clone(over);
+    const o = clone(base);
+    for (const k in over) o[k] = k in base ? merge(base[k], over[k]) : clone(over[k]);
+    return o;
+  }
+  function diff(base, cur) {                       // the minimal override that turns base into cur
+    if (isObj(base) && isObj(cur)) {
+      const o = {}; let any = false;
+      for (const k in cur) { const d = diff(base[k], cur[k]); if (d !== undefined) { o[k] = d; any = true; } }
+      return any ? o : undefined;
+    }
+    return JSON.stringify(base) === JSON.stringify(cur) ? undefined : clone(cur);
+  }
+  const getPath = (o, p) => p.split('.').reduce((a, k) => a?.[k], o);
+  const setPath = (o, p, v) => { const ks = p.split('.'), last = ks.pop(); ks.reduce((a, k) => a[k], o)[last] = v; };
+  const rgb = h => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+  const rgba = (h, a) => `rgba(${rgb(h).join(',')},${a})`;
+  const b64e = s => btoa(String.fromCharCode(...new TextEncoder().encode(s))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const b64d = s => new TextDecoder().decode(Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0)));
+
+  const LABELS = {
+    meta: '元信息', id: '标识', title: '标题', ui: '界面文字', eyebrow: '眉线', lede: '简介', howto: '玩法', howtoDetail: '玩法说明',
+    fallbackTitle: '备用卡片标题', fallbackText: '备用卡片正文', theme: '主题', fonts: '字体', serif: '衬线体', sans: '无衬线体', mono: '等宽体',
+    light: '浅色主题', dark: '深色主题', bg: '背景', ink: '主文字', ink2: '次文字', ink3: '弱文字', accent: '强调色', accent2: '强调色 2', glass: '玻璃底色',
+    darkAt: '深色切换点', panel: '控制面板', tag: '角标', items: '控件', type: '类型', buttons: '按钮', action: '动作', label: '文字', primary: '主按钮',
+    counts: '计数', bind: '绑定', source: '数据源', min: '最小值', max: '最大值', format: '格式', state: '初始状态', flavour: '风味', firmness: '硬度',
+    damping: '波浪阻尼', day: '一天时间', flavours: '果冻风味', name: '名称', swatch: '色块', tint: '透射色', glow: '散射色', density: '浓度',
+    sunElevation: '太阳高度 °', sunAzimuth: '太阳方位 °', sunIntensity: '太阳强度', sunColor: '阳光颜色', backdrop: '背景色', sky: '天空色',
+    ambient: '环境光', moon: '月光', night: '夜晚程度', stars: '星星', fire: '营火', sim: '模拟', wind: '风', strength: '强度', gust: '阵风',
+    swing: '风向摆动', waves: '波浪', gravity: '重力', tensionSoft: '表面张力（软）', tensionFirm: '表面张力（硬）', dampingMin: '阻尼下限',
+    dampingMax: '阻尼上限', ambientSwell: '背景涌浪', jelly: '果冻', wobbleSoft: '摇晃刚度（软）', wobbleFirm: '摇晃刚度（硬）', maxShear: '最大剪切',
+    bodies: '刚体', cannonSpeed: '炮弹初速', cannonElevation: '炮口仰角', coinsPerDrop: '每次金币数', flames: '火焰粒子 /秒', embers: '余烬 /秒',
+    smoke: '烟 /秒', camera: '相机', azimuth: '方位角', elevation: '仰角', distance: '距离', target: '注视点', fov: '视场角', scene: '场景布局',
+    island: '岛屿', x: 'x', z: 'z', radiusX: '半径 x', radiusZ: '半径 z', hills: '丘陵高度', cove: '小湾深度', ship: '船', anchor: '锚',
+    skull: '骷髅岩', yaw: '朝向', scale: '缩放', camp: '营地', chest: '宝箱', xmark: 'X 标记', shovel: '铲子', rowboat: '划艇', wreck: '沉船',
+    palms: '棕榈树', height: '高度', lean: '倾斜', flora: '植被', bushes: '灌木', ferns: '蕨类', grassTufts: '草丛', shoreRocks: '岸边岩石',
+    kelpClumps: '海带丛', trappedBubbles: '果冻气泡', seabedCoins: '海底金币', seed: '随机种子', speed: '速度', hue: '色相', size: '大小',
+  };
+  const label = k => LABELS[k] ?? k;
+
+  const S = { cfg: null, defaults: null, state: {}, opts: null, key: '', saveT: 0 };
+
+  // ── theme ──
+  function applyTheme() {
+    const t = S.cfg.theme, f = t.fonts || {};
+    const block = (sel, c, dark) => `${sel}{--bg:${c.bg};--ink:${c.ink};--ink2:${c.ink2};--ink3:${c.ink3};--accent:${c.accent};--accent2:${c.accent2};` +
+      `--glass:${rgba(c.glass, dark ? 0.6 : 0.62)};--glass-b:${rgba(c.ink, dark ? 0.12 : 0.1)};--track:${rgba(c.ink, dark ? 0.18 : 0.14)};` +
+      `--pill:${rgba(c.glass, dark ? 0.7 : 0.75)};--shadow:0 18px 50px -20px ${dark ? 'rgba(0,0,0,.7)' : rgba(c.ink, 0.35)};}`;
+    let el = $('theme-live');
+    if (!el) { el = document.createElement('style'); el.id = 'theme-live'; document.head.appendChild(el); }
+    el.textContent = `:root{--serif:${f.serif};--sans:${f.sans};--mono:${f.mono}}` + block('html:root', t.light, false) + block('html body.dark', t.dark, true);
+  }
+  function setDark(on) { document.body.classList.toggle('dark', !!on); }
+
+  // ── static chrome ──
+  const rich = s => esc(s).replace(/\[([^\]]+)\]/g, '<kbd>$1</kbd>');
+  function renderMasthead() {
+    const u = S.cfg.ui, [a, b] = u.title || [];
+    const st = $('status');
+    const keep = st ? { cls: st.className, txt: st.querySelector('span').textContent } : { cls: '', txt: 'WebGPU · 启动中' };
+    $('masthead').innerHTML = `<div class="eyebrow"><i></i>${esc(u.eyebrow)}</div><h1><span>${esc(a)}</span><span><em>${esc(b)}</em></span></h1>
+      <p class="lede">${esc(u.lede)}</p>
+      <div class="tools"><div id="status" class="${keep.cls}"><b></b><span>${esc(keep.txt)}</span></div><button class="ui-btn" id="cfgBtn" aria-expanded="false">✎ 配置</button></div>`;
+    $('cfgBtn').onclick = () => toggleEditor();
+    document.title = S.cfg.meta?.title || a;
+  }
+  function renderHowto() {
+    $('howto').innerHTML = `<div class="line">${rich(S.cfg.ui.howto)}</div><p>${esc(S.cfg.ui.howtoDetail)}</p>`;
+  }
+  function renderFallback(msg) {
+    $('fallback').querySelector('.card').innerHTML = `<div class="eyebrow"><i></i>${esc(S.cfg.ui.eyebrow)}</div><h3>${esc(S.cfg.ui.fallbackTitle)}</h3>
+      <p>${msg ? msg : esc(S.cfg.ui.fallbackText)}</p><p>Chrome / Edge：<code>chrome://flags/#enable-unsafe-webgpu</code></p>`;
+  }
+
+  // ── control panel (generated from cfg.panel) ──
+  function fmt(item, v) { const f = item.format && S.opts.formatters?.[item.format]; return f ? f(v, S.cfg) : String(v); }
+  function renderPanel() {
+    const P = $('panel'), open = P.classList.contains('open');
+    let h = `<button class="handle" id="handle" aria-expanded="${open}"><i></i><span>控制</span></button>`;
+    for (const sec of S.cfg.panel) {
+      h += '<section class="sec">';
+      if (sec.title) h += `<h2>${esc(sec.title)} <small>${esc(sec.tag || '')}</small></h2>`;
+      for (const it of sec.items || []) {
+        if (it.type === 'buttons') h += `<div class="row" style="margin-top:6px">${(it.buttons || []).map(b => `<button data-action="${esc(b.action)}" class="${b.primary ? 'primary' : ''}">${esc(b.label)}</button>`).join('')}</div>`;
+        else if (it.type === 'meter') h += `<div class="meter"><div class="lbl"><span>${esc(it.label)}</span><span id="meterv-${esc(it.id)}">—</span></div><div class="bar"><i id="meter-${esc(it.id)}"></i></div></div>`;
+        else if (it.type === 'counts') h += `<div class="counts">${(it.counts || []).map(c => `<div><b id="count-${esc(c.id)}">0</b>${esc(c.label)}</div>`).join('')}</div>`;
+        else if (it.type === 'swatches') h += `<div class="flav" data-bind="${esc(it.bind)}">${(S.cfg[it.source] || []).map((o, i) =>
+          `<button data-i="${i}" aria-pressed="${S.state[it.bind] === i}"><i style="background:${esc(o.swatch)}"></i>${esc(o.name)}</button>`).join('')}</div>`;
+        else if (it.type === 'slider') h += `<div class="slider"><div class="lbl"><span>${esc(it.label)}</span><output data-out="${esc(it.bind)}">${esc(fmt(it, S.state[it.bind]))}</output></div>
+          <input type="range" data-bind="${esc(it.bind)}" min="${it.min ?? 0}" max="${it.max ?? 100}" step="${it.step ?? 1}" value="${S.state[it.bind]}" aria-label="${esc(it.label)}"></div>`;
+      }
+      h += '</section>';
+    }
+    P.innerHTML = h;
+    $('handle').onclick = () => { P.classList.toggle('open'); $('handle').setAttribute('aria-expanded', P.classList.contains('open')); };
+    P.querySelectorAll('[data-action]').forEach(b => b.onclick = () => S.opts.actions?.[b.dataset.action]?.(b));
+    P.querySelectorAll('.flav').forEach(g => g.querySelectorAll('button').forEach(b => b.onclick = () => setState(g.dataset.bind, +b.dataset.i)));
+    P.querySelectorAll('input[type=range]').forEach(r => r.addEventListener('input', () => setState(r.dataset.bind, +r.value)));
+  }
+  function findItem(bind) { for (const s of S.cfg.panel) for (const it of s.items || []) if (it.bind === bind) return it; return {}; }
+  function setState(k, v, silent) {
+    S.state[k] = v;
+    const P = $('panel');
+    P.querySelectorAll(`.flav[data-bind="${k}"] button`).forEach(b => b.setAttribute('aria-pressed', +b.dataset.i === v));
+    const r = P.querySelector(`input[data-bind="${k}"]`); if (r && +r.value !== v) r.value = v;
+    const o = P.querySelector(`output[data-out="${k}"]`); if (o) o.textContent = fmt(findItem(k), v);
+    if (!silent) S.opts.onState?.(k, v, S.state);
+  }
+  const meter = (id, v01, text) => { const b = $('meter-' + id), t = $('meterv-' + id); if (b) b.style.width = (Math.max(0, Math.min(1, v01)) * 100).toFixed(1) + '%'; if (t && text != null) t.textContent = text; };
+  const count = (id, n) => { const e = $('count-' + id); if (e && e.textContent !== String(n)) e.textContent = n; };
+  const buttonLabel = (action, text) => { const b = $('panel').querySelector(`[data-action="${action}"]`); if (b) b.textContent = text; };
+  function status(cls, text) { const s = $('status'); if (!s) return; s.className = cls; s.querySelector('span').textContent = text; }
+  function fail(msg) { renderFallback(msg); document.body.classList.add('na'); status('na', 'WebGPU · 不可用'); console.error('[study] ' + (msg || 'no WebGPU')); }
+
+  // ── config editor ──
+  let tab = 'form';
+  function toggleEditor(force) {
+    const E = $('editor'), open = force ?? !E.classList.contains('open');
+    if (open) renderEditor();
+    E.classList.toggle('open', open);
+    $('cfgBtn')?.setAttribute('aria-expanded', open);
+  }
+  function msg(t) { const m = $('editor').querySelector('.msg'); if (m) m.textContent = t; }
+  function isRebuild(path) { return (S.opts.rebuild || []).some(p => path === p || path.startsWith(p + '.')); }
+  function field(path, key, v) {
+    const id = 'f-' + path.replace(/\./g, '-'), L = `<label for="${id}" title="${esc(path)}">${esc(label(key))}</label>`;
+    if (isHex(v)) return `<div class="f">${L}<div class="col"><input type="color" data-p="${path}" data-k="hex" value="${v}"><input type="text" id="${id}" data-p="${path}" data-k="hex" value="${v}"></div></div>`;
+    if (typeof v === 'number') return `<div class="f">${L}<input type="number" id="${id}" data-p="${path}" data-k="num" value="${v}" step="${Math.abs(v) >= 20 || Number.isInteger(v) && Math.abs(v) >= 2 ? 1 : Math.abs(v) < 0.01 && v !== 0 ? 0.00001 : 0.01}"></div>`;
+    if (typeof v === 'boolean') return `<div class="f">${L}<input type="checkbox" id="${id}" data-p="${path}" data-k="bool" ${v ? 'checked' : ''}></div>`;
+    if (typeof v === 'string') return v.length > 48 ? `<div class="f wide">${L}<textarea id="${id}" data-p="${path}" data-k="str" rows="${Math.min(6, Math.ceil(v.length / 44))}">${esc(v)}</textarea></div>`
+      : `<div class="f">${L}<input type="text" id="${id}" data-p="${path}" data-k="str" value="${esc(v)}"></div>`;
+    if (Array.isArray(v) && v.every(x => typeof x === 'number' || typeof x === 'string'))
+      return `<div class="f">${L}<div class="vec">${v.map((x, i) => `<input type="${typeof x === 'number' ? 'number' : 'text'}" data-p="${path}.${i}" data-k="${typeof x === 'number' ? 'num' : 'str'}" value="${esc(x)}" step="0.01">`).join('')}</div></div>`;
+    return group(path, key, v);
+  }
+  function group(path, key, v) {
+    const rb = isRebuild(path) && !isRebuild(path.split('.').slice(0, -1).join('.')) ? ' <span class="rebuild">重建</span>' : '';
+    if (Array.isArray(v)) {
+      const items = v.map((x, i) => {
+        const nm = isObj(x) ? (x.name || x.title || x.label || x.type || '') : '';
+        return `<details><summary>#${i + 1} <small>${esc(nm)}</small><button class="rm" data-rm="${path}" data-i="${i}" title="删除">×</button></summary>${Object.keys(x).map(k => field(`${path}.${i}.${k}`, k, x[k])).join('')}</details>`;
+      }).join('');
+      return `<details><summary>${esc(label(key))} <small>${v.length}</small>${rb}</summary>${items}<button class="add" data-add="${path}">＋ 复制最后一项</button></details>`;
+    }
+    return `<details${path.split('.').length === 1 && ['ui', 'flavours'].includes(path) ? ' open' : ''}><summary>${esc(label(key))}${rb}</summary>${Object.keys(v).map(k => field(path ? `${path}.${k}` : k, k, v[k])).join('')}</details>`;
+  }
+  function renderEditor() {
+    const E = $('editor'), body = E.querySelector('.body'), scroll = body ? body.scrollTop : 0;
+    const openSet = new Set([...E.querySelectorAll('details[open]>summary')].map(s => s.parentElement.dataset.path).filter(Boolean));
+    E.innerHTML = `<header><div class="eyebrow"><i></i>${esc(S.cfg.ui.eyebrow)}</div><h2>配置作品 <button class="ui-btn" id="edClose" style="margin:0">关闭 ✕</button></h2>
+      <p>修改即时生效；标有「重建」的分组会重新生成场景。配置自动保存在本机浏览器。</p></header>
+      <div class="edbar"><button id="edExport">导出 JSON</button><button id="edImport">导入 JSON</button><button id="edShare">复制分享链接</button><button id="edReset">恢复默认</button></div>
+      <div class="tabs" role="tablist"><button role="tab" data-tab="form" aria-selected="${tab === 'form'}">表单</button><button role="tab" data-tab="json" aria-selected="${tab === 'json'}">JSON</button></div>
+      <div class="body">${tab === 'form' ? Object.keys(S.cfg).filter(k => k !== 'meta').map(k => field(k, k, S.cfg[k])).join('')
+        : `<div class="jsonbar"><button id="jsonApply" class="primary">应用 JSON</button><button id="jsonFmt">格式化</button></div><textarea id="json" spellcheck="false">${esc(JSON.stringify(S.cfg, null, 2))}</textarea>`}</div>
+      <div class="msg"></div><input type="file" id="edFile" accept="application/json,.json" hidden>`;
+    // remember which groups were open, keyed by path
+    E.querySelectorAll('details').forEach(d => { const f = d.querySelector('[data-p],[data-add]'); const p = f ? (f.dataset.p || f.dataset.add) : ''; d.dataset.path = p.split('.').slice(0, 2).join('.') + '|' + d.querySelector('summary').textContent.trim().slice(0, 12); if (openSet.has(d.dataset.path)) d.open = true; });
+    E.querySelector('.body').scrollTop = scroll;
+    $('edClose').onclick = () => toggleEditor(false);
+    E.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { tab = b.dataset.tab; renderEditor(); });
+    $('edExport').onclick = () => {
+      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(S.cfg, null, 2)], { type: 'application/json' }));
+      a.download = (S.cfg.meta?.id || 'study') + '.config.json'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); msg('已导出配置文件。');
+    };
+    $('edImport').onclick = () => $('edFile').click();
+    $('edFile').onchange = async e => { const f = e.target.files[0]; if (!f) return; try { replaceConfig(JSON.parse(await f.text())); msg('已导入：' + f.name); } catch (err) { msg('导入失败：' + err.message); } };
+    $('edShare').onclick = async () => {
+      const d = diff(S.defaults, S.cfg), url = location.origin + location.pathname + location.search + (d ? '#cfg=' + b64e(JSON.stringify(d)) : '');
+      history.replaceState(null, '', url);
+      msg('地址栏已更新为分享链接（' + url.length + ' 字符）。');
+      try { await navigator.clipboard.writeText(url); msg('分享链接已复制（' + url.length + ' 字符）。'); } catch { prompt('复制这个链接：', url); }
+    };
+    $('edReset').onclick = () => { if (confirm('恢复全部默认配置？当前修改会丢失。')) { replaceConfig(clone(S.defaults)); history.replaceState(null, '', location.pathname + location.search); msg('已恢复默认。'); } };
+    if (tab === 'json') {
+      $('jsonApply').onclick = () => { try { replaceConfig(JSON.parse($('json').value)); msg('JSON 已应用。'); } catch (err) { msg('JSON 有误：' + err.message); } };
+      $('jsonFmt').onclick = () => { try { $('json').value = JSON.stringify(JSON.parse($('json').value), null, 2); } catch (err) { msg('JSON 有误：' + err.message); } };
+      return;
+    }
+    E.querySelectorAll('[data-p]').forEach(inp => inp.addEventListener('input', () => {
+      const p = inp.dataset.p, k = inp.dataset.k;
+      const v = k === 'num' ? parseFloat(inp.value) : k === 'bool' ? inp.checked : inp.value;
+      if (k === 'num' && !Number.isFinite(v)) return;
+      if (k === 'hex') { if (!isHex(v)) return; inp.parentElement.querySelectorAll('input').forEach(o => { if (o !== inp) o.value = v; }); }
+      setPath(S.cfg, p, v); changed(p);
+    }));
+    E.querySelectorAll('[data-rm]').forEach(b => b.onclick = e => {
+      e.preventDefault(); const arr = getPath(S.cfg, b.dataset.rm); if (arr.length <= 1) return msg('至少保留一项。');
+      arr.splice(+b.dataset.i, 1); changed(b.dataset.rm); renderEditor();
+    });
+    E.querySelectorAll('[data-add]').forEach(b => b.onclick = () => { const arr = getPath(S.cfg, b.dataset.add); arr.push(clone(arr[arr.length - 1])); changed(b.dataset.add); renderEditor(); });
+  }
+
+  // ── change propagation ──
+  let rebuildT = 0;
+  function changed(path) {
+    const top = path.split('.')[0];
+    if (top === 'ui' || top === 'meta') { renderMasthead(); renderHowto(); }
+    if (top === 'theme') applyTheme();
+    if (top === 'panel' || top === 'state' || (S.opts.panelDeps || []).includes(top)) {
+      if (top === 'state') for (const k in S.cfg.state) setState(k, S.cfg.state[k], false);
+      renderPanel();
+    }
+    if (isRebuild(path)) { clearTimeout(rebuildT); rebuildT = setTimeout(() => { msg('正在重建场景…'); S.opts.onRebuild?.(S.cfg); msg('场景已重建。'); }, 350); }
+    S.opts.onConfig?.(path, S.cfg);
+    clearTimeout(S.saveT); S.saveT = setTimeout(save, 400);
+  }
+  function save() { try { const d = diff(S.defaults, S.cfg); if (d) localStorage.setItem(S.key, JSON.stringify(d)); else localStorage.removeItem(S.key); } catch { } }
+  function replaceConfig(next) {
+    S.cfg = merge(S.defaults, next);
+    for (const k in S.cfg.state) S.state[k] = S.cfg.state[k];
+    applyTheme(); renderMasthead(); renderHowto(); renderPanel();
+    S.opts.onRebuild?.(S.cfg); S.opts.onConfig?.('*', S.cfg);
+    for (const k in S.state) S.opts.onState?.(k, S.state[k], S.state);
+    save(); renderEditor();
+  }
+
+  async function mount(opts) {
+    S.opts = opts; S.defaults = clone(opts.defaults); S.key = 'materialStudy:' + (S.defaults.meta?.id || 'study');
+    let over;
+    try {
+      const h = location.hash.match(/cfg=([^&]+)/); if (h) over = JSON.parse(b64d(h[1]));
+      const q = new URLSearchParams(location.search).get('config');
+      if (!over && q) over = await (await fetch(q)).json();
+      if (!over) { const ls = localStorage.getItem(S.key); if (ls) over = JSON.parse(ls); }
+    } catch (e) { console.warn('[study] ignoring bad config override', e); }
+    S.cfg = merge(S.defaults, over || {});
+    for (const k in S.cfg.state) S.state[k] = S.cfg.state[k];
+    applyTheme(); renderMasthead(); renderHowto(); renderPanel(); renderFallback();
+    addEventListener('keydown', e => { if (e.key === 'Escape' && $('editor').classList.contains('open')) toggleEditor(false); });
+    return S.cfg;
+  }
+  return {
+    mount, status, fail, setDark, meter, count, buttonLabel, setState, toggleEditor,
+    get cfg() { return S.cfg; }, get state() { return S.state; },
+    util: { merge, diff, clone, getPath, setPath },
+  };
+})();
+
+// ───────────────────────── Starter study · default configuration ─────────────────────────
+// Copy this file and src/starter/50_main.js to begin a new study in the series.
+const DEFAULT_CONFIG = {
+  meta: { id: 'starter', title: '果冻样本 — 材料研究' },
+  ui: {
+    eyebrow: '材料研究 · 模板',
+    title: ['果冻', '样本。'],
+    lede: '系列模板的最小示例：一颗用光线步进绘制的果冻球。改配置即可得到新作品的骨架，再替换场景代码即可。',
+    howto: '玩法——点击果冻戳一下，按 [空格] 也行。',
+    howtoDetail: '右侧面板切换口味、调节硬度 · 左上角「✎ 配置」可实时编辑全部文案、配色与参数，并导出 JSON 或复制分享链接',
+    fallbackTitle: '果冻凝固不了。',
+    fallbackText: '本作品使用 WebGPU 渲染，但当前浏览器或显卡适配器不支持。',
+  },
+  theme: {
+    fonts: {
+      serif: '"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Songti SC","STSong","Noto Serif SC","Source Han Serif SC",serif',
+      sans: 'ui-sans-serif,-apple-system,"Segoe UI",Roboto,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans SC",sans-serif',
+      mono: 'ui-monospace,"SF Mono",Menlo,Consolas,"PingFang SC","Microsoft YaHei",monospace',
+    },
+    light: { bg: '#ece6dc', ink: '#1d1a16', ink2: '#5d554b', ink3: '#8b8276', accent: '#c2562b', accent2: '#2a8c86', glass: '#faf7f1' },
+    dark: { bg: '#0f1424', ink: '#efe7da', ink2: '#b9b0a3', ink3: '#857d72', accent: '#f0a050', accent2: '#5fd0c4', glass: '#141828' },
+    darkAt: 0.5,
+  },
+  panel: [
+    { title: '样本', tag: '行动', items: [
+      { type: 'buttons', buttons: [{ action: 'poke', label: '戳一下', primary: true }] },
+      { type: 'meter', id: 'wobble', label: '晃动' },
+      { type: 'counts', counts: [{ id: 'pokes', label: '次数' }] },
+    ] },
+    { title: '风味', tag: '果冻', items: [
+      { type: 'swatches', bind: 'flavour', source: 'flavours' },
+      { type: 'slider', bind: 'firmness', label: '硬度', min: 0, max: 100 },
+      { type: 'slider', bind: 'night', label: '夜色', min: 0, max: 100 },
+    ] },
+    { items: [{ type: 'buttons', buttons: [{ action: 'pause', label: '暂停' }] }] },
+  ],
+  state: { flavour: 0, firmness: 50, night: 0 },
+  flavours: [
+    { name: '青绿', swatch: '#3cb7ad', color: '#3cb7ad' },
+    { name: '金酒', swatch: '#d9902e', color: '#d9902e' },
+    { name: '克拉肯', swatch: '#7a4bb3', color: '#7a4bb3' },
+  ],
+  sim: { wobbleSoft: 6, wobbleFirm: 30, size: 1.0 },
+};
+
+// ───────────────────────── Starter study · scene ─────────────────────────
+// The minimal contract with the shell: mount it, register actions, react to state, report readouts.
+const WGSL = /* wgsl */`
+struct U { res: vec4f, col: vec4f, p: vec4f };   // res.xy, time | jelly rgb | wobble, night, size, bg
+@group(0) @binding(0) var<uniform> u: U;
+@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+  let p = vec2f(f32((i << 1u) & 2u), f32(i & 2u)) * 2.0 - 1.0; return vec4f(p, 0.0, 1.0);
+}
+fn sdf(p: vec3f) -> f32 {
+  let t = u.res.z; let w = u.p.x;
+  let q = p * vec3f(1.0 + 0.25 * w * sin(t * 9.0), 1.0 - 0.25 * w * sin(t * 9.0), 1.0 + 0.25 * w * sin(t * 9.0));
+  return length(q) - u.p.z + 0.04 * sin(p.x * 5.0 + t) * sin(p.y * 5.0 - t * 1.3) * sin(p.z * 5.0);
+}
+fn nrm(p: vec3f) -> vec3f { let e = vec2f(0.002, 0.0);
+  return normalize(vec3f(sdf(p + e.xyy) - sdf(p - e.xyy), sdf(p + e.yxy) - sdf(p - e.yxy), sdf(p + e.yyx) - sdf(p - e.yyx))); }
+@fragment fn fs(@builtin(position) fc: vec4f) -> @location(0) vec4f {
+  let uv = (fc.xy - 0.5 * u.res.xy) / u.res.y * vec2f(1.0, -1.0);
+  let bgc = mix(vec3f(0.93, 0.9, 0.85), vec3f(0.05, 0.07, 0.13), u.p.y) * (1.0 - 0.3 * length(uv));
+  let ro = vec3f(0.0, 0.3, 4.8); let rd = normalize(vec3f(uv - vec2f(0.0, 0.08), -1.5));
+  var t = 0.0; var hit = false;
+  for (var i = 0; i < 90; i++) { let d = sdf(ro + rd * t); if (d < 0.001) { hit = true; break; } t += d; if (t > 8.0) { break; } }
+  var c = bgc;
+  // contact shadow on the floor
+  let fy = -u.p.z * 1.02; let ft = (fy - ro.y) / rd.y;
+  if (ft > 0.0 && (!hit || ft < t)) { let fp = ro + rd * ft; c = mix(c, c * mix(vec3f(0.55), u.col.rgb, 0.5), exp(-length(fp.xz) * 1.6)); }
+  if (hit) {
+    let p = ro + rd * t; let n = nrm(p); let l = normalize(vec3f(-0.5, 0.8, 0.4));
+    let fres = pow(1.0 - max(dot(n, -rd), 0.0), 3.0);
+    let thick = exp(-max(dot(-n, rd), 0.0) * 1.5);
+    let body = u.col.rgb * (0.35 + 0.65 * max(dot(n, l), 0.0)) * mix(1.0, 0.35, u.p.y);
+    c = mix(body, bgc * u.col.rgb * 1.6, thick * 0.45);
+    c += vec3f(1.0) * pow(max(dot(reflect(rd, n), l), 0.0), 60.0) * 0.8 + fres * mix(vec3f(0.9), vec3f(0.4, 0.5, 0.9), u.p.y) * 0.5;
+  }
+  return vec4f(pow(c, vec3f(1.0 / 1.1)), 1.0);
+}`;
+
+async function main() {
+  const actions = {};
+  const st = { wob: 0, wv: 0, pokes: 0, paused: false, t: 0 };
+  await Shell.mount({ defaults: DEFAULT_CONFIG, actions, panelDeps: ['flavours'], onState: () => { } });
+  const cfg = () => Shell.cfg;
+  const poke = () => { st.wv += 3; st.pokes++; Shell.count('pokes', st.pokes); };
+  Object.assign(actions, {
+    poke,
+    pause: () => { st.paused = !st.paused; Shell.buttonLabel('pause', st.paused ? '继续' : '暂停'); Shell.status(st.paused ? 'paused' : 'live', st.paused ? 'WebGPU · 已暂停' : 'WebGPU · 实时'); },
+  });
+  if (!navigator.gpu) return Shell.fail();
+  const adapter = await navigator.gpu.requestAdapter().catch(() => null);
+  if (!adapter) return Shell.fail('浏览器支持 WebGPU，但没有拿到可用的显卡适配器。');
+  const device = await adapter.requestDevice();
+  const canvas = document.getElementById('gl'), ctx = canvas.getContext('webgpu'), format = navigator.gpu.getPreferredCanvasFormat();
+  ctx.configure({ device, format, alphaMode: 'opaque' });
+  const mod = device.createShaderModule({ code: WGSL });
+  const pipe = device.createRenderPipeline({ layout: 'auto', vertex: { module: mod, entryPoint: 'vs' }, fragment: { module: mod, entryPoint: 'fs', targets: [{ format }] } });
+  const ub = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const bg = device.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: ub } }] });
+  canvas.addEventListener('pointerdown', poke);
+  addEventListener('keydown', e => { if (e.code === 'Space' && !(e.target instanceof HTMLInputElement) && !(e.target instanceof HTMLTextAreaElement) && !(e.target instanceof HTMLButtonElement)) { e.preventDefault(); poke(); } });
+  Shell.status('live', 'WebGPU · 实时');
+  const lin = h => [1, 3, 5].map(i => Math.pow(parseInt(h.slice(i, i + 2), 16) / 255, 1.0));
+  let last = performance.now(), dark = null;
+  function frame(now) {
+    const dt = Math.min((now - last) / 1000, 0.05); last = now;
+    const dpr = Math.min(devicePixelRatio || 1, 2), w = Math.floor(canvas.clientWidth * dpr), h = Math.floor(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+    const c = cfg(), s = Shell.state, k = c.sim.wobbleSoft + (c.sim.wobbleFirm - c.sim.wobbleSoft) * s.firmness / 100;
+    if (!st.paused) { st.t += dt; st.wv += (-k * st.wob - 1.5 * st.wv) * dt; st.wob += st.wv * dt; }
+    const night = s.night / 100, col = lin(c.flavours[Math.min(s.flavour, c.flavours.length - 1)].color);
+    device.queue.writeBuffer(ub, 0, new Float32Array([w, h, st.t, 0, ...col, 1, Math.min(Math.abs(st.wob), 1), night, c.sim.size, 0]));
+    const enc = device.createCommandEncoder();
+    const p = enc.beginRenderPass({ colorAttachments: [{ view: ctx.getCurrentTexture().createView(), loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }] });
+    p.setPipeline(pipe); p.setBindGroup(0, bg); p.draw(3); p.end();
+    device.queue.submit([enc.finish()]);
+    Shell.meter('wobble', Math.abs(st.wob) * 2, Math.abs(st.wob) < 0.05 ? '静止' : '晃动中');
+    const isDark = night > c.theme.darkAt; if (isDark !== dark) { dark = isDark; Shell.setDark(isDark); }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+main().catch(e => { console.error(e); Shell.fail('出了点问题：' + e.message); });
+</script>
+</body>
+</html>

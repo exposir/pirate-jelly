@@ -2,9 +2,9 @@
 // ───────────────────────── world constants ─────────────────────────
 const BLOCK = 5.2, HALF = 2.6, WL = 1.45;           // block size, water rest level (block local)
 const GN = 128, GDX = BLOCK / GN;                    // simulation grid
-const G_BODY = 6.5;                                   // gravity for rigid bodies
+let G_BODY = 6.5;                                     // gravity for rigid bodies (configurable)
 const LAYOUT = {
-  island: [0.1, -1.55, 2.1, 1.1],
+  island: [0.1, -1.55, 2.1, 1.1], hills: 1, cove: 0.13, skullScale: 1.28,
   ship: [-1.0, 1.25], anchor: [-1.05, 0.15],
   skull: [-1.82, -0.95, 0.85],                         // x, z, yaw
   fire: [0.3, -1.05], chest: [0.98, -1.18], xmark: [0.62, -0.8], shovel: [0.78, -0.74],
@@ -111,7 +111,7 @@ function islandR(x, z) {
   const [cx, cz, rx, rz] = LAYOUT.island;
   let r = Math.hypot((x - cx) / rx, (z - cz) / rz);
   r += 0.07 * fbm2(x * 1.3 + 4, z * 1.3 - 2, 3);                              // ragged shoreline
-  r += 0.13 * Math.exp(-((x - 0.3) ** 2 / 0.22 + (z + 0.62) ** 2 / 0.05));   // the cove bites in
+  r += LAYOUT.cove * Math.exp(-((x - LAYOUT.fire[0]) ** 2 / 0.22 + (z - LAYOUT.fire[1] - 0.43) ** 2 / 0.05));   // the cove bites in
   return r;
 }
 function terrainFn(x, z) {
@@ -125,7 +125,7 @@ function terrainFn(x, z) {
   // jungle hills, mostly at the back of the island
   const hill = (hx, hz, hr, hh) => hh * Math.exp(-((x - hx) ** 2 + (z - hz) ** 2) / (hr * hr));
   let hills = hill(-0.55, -1.95, 0.62, 0.62) + hill(0.75, -2.05, 0.58, 0.5) + hill(-1.25, -1.62, 0.42, 0.3) + hill(1.55, -1.75, 0.4, 0.22);
-  hills *= 1 + 0.35 * fbm2(x * 2.2, z * 2.2, 3);
+  hills *= (1 + 0.35 * fbm2(x * 2.2, z * 2.2, 3)) * LAYOUT.hills;
   h += hills * smooth(0.78, 0.45, r);
   return h;
 }
