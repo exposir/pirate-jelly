@@ -61,6 +61,9 @@ const DEFAULT_CONFIG = {
     bodies: { gravity: 6.5, cannonSpeed: 4.6, cannonElevation: 0.34, coinsPerDrop: 5 },
     fire: { flames: 45, embers: 6, smoke: 7 },
   },
+  // jelly block dimensions and the water simulation window (rebuilds everything)
+  world: { size: 5.2, terrainRes: 128, waterRes: 128, waterCell: 0, windowFade: 0, swell: { amp: 0, length: 1.6, speed: 1.2 }, islets: [] },
+  voyage: { enabled: false, thrust: 1.9, reverse: 0.6, turn: 0.25, camera: { distance: 4.6, elevation: 0.36, lag: 2.2 } },
   camera: { azimuth: 0.78, elevation: 0.47, distance: 12.5, target: [0, 1.35, 0.1], fov: 0.56 },
   // world layout — editing anything below rebuilds the island
   scene: {

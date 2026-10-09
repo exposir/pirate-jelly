@@ -1,64 +1,102 @@
 
+// ───────────────────────── terrain (global heightfield) ─────────────────────────
+function splatGrid(a, N, dx, ox, oz, x, z, r, amp, add = true) {
+  const ci = (x - ox) / dx - 0.5, cj = (z - oz) / dx - 0.5, R = Math.ceil(r * 2 / dx);
+  const i0 = Math.max(0, Math.floor(ci - R)), i1 = Math.min(N - 1, Math.ceil(ci + R)), j0 = Math.max(0, Math.floor(cj - R)), j1 = Math.min(N - 1, Math.ceil(cj + R));
+  const k = 1 / (r * r);
+  for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+    const ddx = (i - ci) * dx, ddz = (j - cj) * dx, g = Math.exp(-(ddx * ddx + ddz * ddz) * k) * amp;
+    if (add) a[j * N + i] += g; else a[j * N + i] = Math.max(a[j * N + i], g);
+  }
+}
+function sampGrid(a, N, dx, ox, oz, x, z) {
+  const gx = (x - ox) / dx - 0.5, gz = (z - oz) / dx - 0.5;
+  const i0 = Math.floor(gx), j0 = Math.floor(gz), fx = gx - i0, fz = gz - j0;
+  const c = (i, j) => a[clamp(j, 0, N - 1) * N + clamp(i, 0, N - 1)];
+  return lerp(lerp(c(i0, j0), c(i0 + 1, j0), fx), lerp(c(i0, j0 + 1), c(i0 + 1, j0 + 1), fx), fz);
+}
+class Terrain {
+  constructor() { this.load(); }
+  load() {
+    this.N = TN; this.dx = TDX; this.h0 = new Float32Array(TN * TN);
+    for (let j = 0; j < TN; j++) for (let i = 0; i < TN; i++) this.h0[j * TN + i] = terrainFn(-HALF + (i + 0.5) * TDX, -HALF + (j + 0.5) * TDX);
+    this.h = this.h0.slice(); this.dirty = true;
+  }
+  reset() { this.h.set(this.h0); this.dirty = true; }
+  at(x, z) { return sampGrid(this.h, this.N, this.dx, -HALF, -HALF, x, z); }
+  normal(x, z) { const e = this.dx; return vnorm([this.at(x - e, z) - this.at(x + e, z), 2 * e, this.at(x, z - e) - this.at(x, z + e)]); }
+  crater(x, z, r, depth) {
+    splatGrid(this.h, this.N, this.dx, -HALF, -HALF, x, z, r, -depth);
+    splatGrid(this.h, this.N, this.dx, -HALF, -HALF, x, z, r * 1.8, depth * 0.25);
+    this.dirty = true;
+  }
+}
+
 // ───────────────────────── shallow water (staggered grid, CPU) ─────────────────────────
+// Simulated in a window of GN×GN cells. When the window is smaller than the block it follows
+// a focus point (the ship) by whole-cell shifts and fades into the analytic swell at its rim.
 const G_WAVE = 5.0;
 class Water {
-  constructor() {
-    const N = GN;
+  constructor(terrain) {
+    const N = this.N = GN; this.dx = GDX; this.terrain = terrain;
     this.eta = new Float32Array(N * N); this.P = new Float32Array(N * N); this.foam = new Float32Array(N * N);
-    this.lap = new Float32Array(N * N);
+    this.lap = new Float32Array(N * N); this.sponge = new Float32Array(N * N);
     this.u = new Float32Array((N + 1) * N); this.v = new Float32Array(N * (N + 1));
-    this.terr0 = new Float32Array(N * N); this.terr = new Float32Array(N * N);
-    this.loadTerrain(false);
-    this.tex = new Float32Array(N * N * 4); this.g = G_WAVE;
+    this.tex = new Float32Array(N * N * 4); this.g = G_WAVE; this.time = 0;
+    this.windowed = N * GDX < BLOCK - 1e-6;
+    this.ox = this.oz = this.windowed ? -N * GDX / 2 : -HALF;
+    const F = Math.max(SWELL.fade, 1);
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+      const e = Math.min(i, j, N - 1 - i, N - 1 - j);
+      this.sponge[j * N + i] = this.windowed ? lerp(0.97, 1, smooth(0, F, e)) : 1;
+    }
     this.reset();
   }
-  cx(i) { return -HALF + (i + 0.5) * GDX; }
-  loadTerrain(reset = true) {
-    for (let j = 0; j < GN; j++) for (let i = 0; i < GN; i++) this.terr0[j * GN + i] = terrainFn(this.cx(i), this.cx(j));
-    if (reset) this.reset();
-  }
-  reset() {
-    this.terr.set(this.terr0); this.eta.fill(0); this.u.fill(0); this.v.fill(0); this.foam.fill(0); this.P.fill(0);
-    this.updateDepth();
-  }
+  reset() { this.eta.fill(0); this.u.fill(0); this.v.fill(0); this.foam.fill(0); this.P.fill(0); this.updateDepth(); }
   updateDepth() {
-    const N = GN, D = this.D = new Float32Array(N * N), wet = this.wet = new Uint8Array(N * N);
-    for (let k = 0; k < N * N; k++) { D[k] = Math.max(WL - this.terr[k], 0); wet[k] = D[k] > 0.012 ? 1 : 0; }
-  }
-  // bilinear sample of a cell-centred field
-  samp(a, x, z) {
-    const N = GN, gx = (x + HALF) / GDX - 0.5, gz = (z + HALF) / GDX - 0.5;
-    const i0 = Math.floor(gx), j0 = Math.floor(gz), fx = gx - i0, fz = gz - j0;
-    const c = (i, j) => a[clamp(j, 0, N - 1) * N + clamp(i, 0, N - 1)];
-    return lerp(lerp(c(i0, j0), c(i0 + 1, j0), fx), lerp(c(i0, j0 + 1), c(i0 + 1, j0 + 1), fx), fz);
-  }
-  height(x, z) { return WL + this.samp(this.eta, x, z); }
-  ground(x, z) { return this.samp(this.terr, x, z); }
-  groundN(x, z) { const e = GDX; return vnorm([this.ground(x - e, z) - this.ground(x + e, z), 2 * e, this.ground(x, z - e) - this.ground(x, z + e)]); }
-  slope(x, z) { const e = GDX; return [(this.height(x + e, z) - this.height(x - e, z)) / (2 * e), (this.height(x, z + e) - this.height(x, z - e)) / (2 * e)]; }
-  // gaussian splat helper
-  splat(a, x, z, r, amp, add = true) {
-    const N = GN, ci = (x + HALF) / GDX - 0.5, cj = (z + HALF) / GDX - 0.5, R = Math.ceil(r * 2 / GDX);
-    const i0 = Math.max(0, Math.floor(ci - R)), i1 = Math.min(N - 1, Math.ceil(ci + R)), j0 = Math.max(0, Math.floor(cj - R)), j1 = Math.min(N - 1, Math.ceil(cj + R));
-    const k = 1 / (r * r);
-    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
-      const dx = (i - ci) * GDX, dz = (j - cj) * GDX, g = Math.exp(-(dx * dx + dz * dz) * k) * amp;
-      if (add) a[j * N + i] += g; else a[j * N + i] = Math.max(a[j * N + i], g);
+    const N = this.N, D = this.D = new Float32Array(N * N), wet = this.wet = new Uint8Array(N * N);
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+      const x = this.ox + (i + 0.5) * this.dx, z = this.oz + (j + 0.5) * this.dx, k = j * N + i;
+      const inside = Math.abs(x) < HALF && Math.abs(z) < HALF;
+      D[k] = inside ? Math.max(WL - this.terrain.at(x, z), 0) : 0; wet[k] = D[k] > 0.012 ? 1 : 0;
     }
   }
+  // keep the window centred on a focus point (whole-cell shifts)
+  follow(x, z) {
+    if (!this.windowed) return;
+    const N = this.N, dx = this.dx, half = N * dx / 2;
+    const ki = Math.round((x - (this.ox + half)) / dx), kj = Math.round((z - (this.oz + half)) / dx);
+    if (Math.abs(ki) < 6 && Math.abs(kj) < 6) return;
+    const shift = (a, w, h) => {
+      const o = new Float32Array(a.length);
+      for (let j = 0; j < h; j++) { const sj = j + kj; if (sj < 0 || sj >= h) continue;
+        for (let i = 0; i < w; i++) { const si = i + ki; if (si >= 0 && si < w) o[j * w + i] = a[sj * w + si]; } }
+      a.set(o);
+    };
+    shift(this.eta, N, N); shift(this.foam, N, N); shift(this.u, N + 1, N); shift(this.v, N, N + 1);
+    this.ox += ki * dx; this.oz += kj * dx;
+    this.updateDepth();
+  }
+  samp(a, x, z) {
+    const gx = (x - this.ox) / this.dx - 0.5, gz = (z - this.oz) / this.dx - 0.5, N = this.N;
+    if (gx < -0.5 || gz < -0.5 || gx > N - 0.5 || gz > N - 0.5) return 0;
+    const v = sampGrid(a, N, this.dx, this.ox, this.oz, x, z);
+    return SWELL.fade > 0 ? v * smooth(0, SWELL.fade, Math.min(gx, gz, N - 1 - gx, N - 1 - gz)) : v;
+  }
+  height(x, z) { return WL + this.samp(this.eta, x, z) + swellAt(x, z, this.time); }
+  ground(x, z) { return this.terrain.at(x, z); }
+  groundN(x, z) { return this.terrain.normal(x, z); }
+  slope(x, z) { const e = this.dx; return [(this.height(x + e, z) - this.height(x - e, z)) / (2 * e), (this.height(x, z + e) - this.height(x, z - e)) / (2 * e)]; }
+  splat(a, x, z, r, amp, add = true) { splatGrid(a, this.N, this.dx, this.ox, this.oz, x, z, r, amp, add); }
   pressure(x, z, r, amp) { this.splat(this.P, x, z, r, amp); }
   splash(x, z, r, amp) {
     this.splat(this.eta, x, z, r, -amp); this.splat(this.eta, x, z, r * 2.2, amp * 0.22);
     this.splat(this.foam, x, z, r * 1.6, 1, false);
   }
-  crater(x, z, r, depth) {
-    this.splat(this.terr, x, z, r, -depth);
-    this.splat(this.terr, x, z, r * 1.8, depth * 0.25);
-    this.updateDepth();
-  }
+  crater(x, z, r, depth) { this.terrain.crater(x, z, r, depth); this.updateDepth(); }
   step(dt, gx, gz, damp, tension) {
-    const N = GN, eta = this.eta, P = this.P, u = this.u, v = this.v, D = this.D, wet = this.wet, lap = this.lap;
-    const idx = 1 / GDX, idx2 = idx * idx, kd = Math.exp(-damp * dt);
+    const N = this.N, eta = this.eta, P = this.P, u = this.u, v = this.v, D = this.D, wet = this.wet, lap = this.lap, sp = this.sponge;
+    const idx = 1 / this.dx, idx2 = idx * idx, kd = Math.exp(-damp * dt);
     if (tension > 0) {
       for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
         const k = j * N + i; if (!wet[k]) { lap[k] = 0; continue; }
@@ -86,9 +124,10 @@ class Water {
       const Dl = i > 0 ? 0.5 * (D[k] + D[k - 1]) : 0, Dr = i < N - 1 ? 0.5 * (D[k] + D[k + 1]) : 0;
       const Db = j > 0 ? 0.5 * (D[k] + D[k - N]) : 0, Dt = j < N - 1 ? 0.5 * (D[k] + D[k + N]) : 0;
       const div = (Dr * u[fl + 1] - Dl * u[fl]) + (Dt * v[fb + N] - Db * v[fb]);
-      eta[k] = clamp(eta[k] - dt * div * idx, -0.6, 0.6);
+      eta[k] = clamp(eta[k] - dt * div * idx, -0.6, 0.6) * sp[k];
     }
     // a whisper of viscosity keeps the grid smooth
+    if (this.windowed) for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) { const k = j * N + i; u[j * (N + 1) + i] *= sp[k]; v[k] *= sp[k]; }
     const nu = 0.0025 * dt * idx2;
     for (let j = 1; j < N - 1; j++) for (let i = 1; i < N - 1; i++) {
       const k = j * N + i; if (!wet[k]) continue;
@@ -97,14 +136,14 @@ class Water {
     for (let j = 1; j < N - 1; j++) for (let i = 1; i < N - 1; i++) { const k = j * N + i; if (wet[k]) eta[k] += nu * lap[k] * (wet[k - 1] & wet[k + 1] & wet[k - N] & wet[k + N]); }
   }
   finishFrame(dt) {
-    const N = GN, t = this.tex, eta = this.eta, foam = this.foam, D = this.D;
+    const N = this.N, t = this.tex, eta = this.eta, foam = this.foam, D = this.D;
     let E = 0; const fd = Math.exp(-dt * 0.9);
     for (let k = 0; k < this.u.length; k++) E += this.u[k] * this.u[k] + this.v[k] * this.v[k];
     for (let k = 0; k < N * N; k++) {
       const e = eta[k];
       const shallow = D[k] < 0.25 ? 1 : 0.3;
       foam[k] = Math.max(foam[k] * fd, clamp((Math.abs(e) - 0.05) * 5 * shallow, 0, 1));
-      t[k * 4] = e; t[k * 4 + 1] = this.terr[k]; t[k * 4 + 2] = foam[k];
+      t[k * 4] = e; t[k * 4 + 1] = foam[k];
     }
     this.P.fill(0);
     return E;
@@ -187,14 +226,15 @@ class Body {
 }
 
 // ───────────────────────── ship (10-point buoyancy rigid body) ─────────────────────────
+const SHIP_PROBES = [[0, -0.12, 0.84], [0, -0.12, 0.45], [0.2, -0.1, 0.05], [-0.2, -0.1, 0.05], [0, -0.12, -0.4], [0, -0.1, -0.76]];
 class Ship {
   constructor() { this.reset(); }
   reset() {
     const [x, z] = LAYOUT.ship, [ax, az] = LAYOUT.anchor;
     this.yaw0 = Math.atan2(ax - x, az - z);
     this.pos = [x, WL, z]; this.vel = [0, 0, 0]; this.q = Q.axis([0, 1, 0], this.yaw0); this.w = [0, 0, 0];
-    this.I = [0.22, 0.24, 0.07]; this.m = 1;
-    this.drag = null; this.gunIdx = 0; this.recoil = 0;
+    this.I = [0.22, 0.24, 0.12]; this.m = 1;
+    this.drag = null; this.gunIdx = 0; this.recoil = 0; this.anchored = true; this.control = null;
     this.ropeLen = null;
   }
   toWorld(lp) { return vadd(this.pos, Q.rot(this.q, lp)); }
@@ -220,6 +260,22 @@ class Ship {
       const g = water.ground(p[0], p[2]) + 0.0;
       if (p[1] - 0.12 < g) force(vscale(up, (g - p[1] + 0.12) * 40), p);
     }
+    // shoals & beaches: the keel can't climb out of the water — push back along the slope
+    for (const lp of SHIP_PROBES) {
+      const p = this.toWorld(lp), g = water.ground(p[0], p[2]), pen = g - (WL - 0.16);
+      if (pen <= 0) continue;
+      const n = water.groundN(p[0], p[2]); let h = [n[0], 0, n[2]]; const hl = Math.hypot(h[0], h[2]);
+      h = hl > 1e-4 ? vscale(h, 1 / hl) : vscale(vnorm([this.pos[0] - p[0], 0, this.pos[2] - p[2]]), 1);
+      const vp = vadd(this.vel, vcross(this.w, vsub(p, this.pos))), vn = vdot(vp, h);
+      force(vscale(h, pen * 60 - Math.min(vn, 0) * 6), [p[0], this.pos[1], p[2]]);
+    }
+    if (this.rock) {   // Skull Rock as a round pillar
+      const [rx, rz, rr2] = this.rock;
+      for (const lp of SHIP_PROBES) {
+        const p = this.toWorld(lp), dx = p[0] - rx, dz = p[2] - rz, d = Math.hypot(dx, dz);
+        if (d < rr2 && d > 1e-4) { const h = [dx / d, 0, dz / d], vn = vdot(this.vel, h); force(vscale(h, (rr2 - d) * 60 - Math.min(vn, 0) * 6), [p[0], this.pos[1], p[2]]); }
+      }
+    }
     // waves push the hull downhill
     const sl = water.slope(this.pos[0], this.pos[2]);
     F[0] -= sl[0] * gmag * 0.6; F[2] -= sl[1] * gmag * 0.6;
@@ -230,12 +286,24 @@ class Ship {
     const fb = Q.rot(this.q, [-vb[0] * 2.6, -vb[1] * 0.6, -vb[2] * 1.1]);
     F[0] += fb[0] - this.vel[0] * 0.5; F[1] += fb[1]; F[2] += fb[2] - this.vel[2] * 0.5;
     const wb = Q.rot(Q.conj(this.q), this.w);
-    T = vadd(T, Q.rot(this.q, [-wb[0] * 0.25, -wb[1] * 0.35, -wb[2] * 0.05]));
+    T = vadd(T, Q.rot(this.q, [-wb[0] * 0.25, -wb[1] * 0.35, -wb[2] * 0.2]));
+    // helm: thrust along the keel, rudder turns the bow (more bite with way on)
+    const C = this.control;
+    if (C) {
+      const fwd = Q.rot(this.q, [0, 0, 1]), sp = vdot(this.vel, fwd);
+      const th = C.thrust > 0 ? C.thrust * C.power : C.thrust * C.reverse;
+      F[0] += fwd[0] * th; F[2] += fwd[2] * th;
+      const yaw = C.turn * C.rudder * (0.6 + Math.min(Math.abs(sp), 1.2)) * (sp < -0.05 ? -1 : 1);
+      T = vadd(T, vscale(up, yaw));
+      T = vadd(T, vscale(fwd, -C.turn * Math.min(Math.abs(sp), 1) * 0.015));         // a little heel into the turn
+    }
+    // ballast: the keel weight rights the hull (keeps her from turning turtle)
+    T = vadd(T, vscale(vcross(Q.rot(this.q, [0, 1, 0]), up), 3.5));
     // elastic anchor rode from the bow hawse
     const hw = this.toWorld(SHIP_INFO.anchorHawse), d = vsub(hw, anchorRing), L = vlen(d);
     if (this.ropeLen === null) this.ropeLen = L * 0.985;
     this.rope = L / this.ropeLen;
-    if (L > this.ropeLen) {
+    if (this.anchored && L > this.ropeLen) {
       const n = vscale(d, 1 / L), vh = vadd(this.vel, vcross(this.w, vsub(hw, this.pos)));
       force(vscale(n, -(L - this.ropeLen) * 6 - Math.max(vdot(vh, n), 0) * 3), hw);
     }

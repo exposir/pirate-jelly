@@ -30,11 +30,12 @@ async function main() {
   const actions = {};
   let hooks = { onState() { }, onRebuild() { }, onConfig() { } };
   await Shell.mount({
-    defaults: DEFAULT_CONFIG, actions, rebuild: ['scene'], panelDeps: ['flavours', 'day'],
+    defaults: DEFAULT_CONFIG, actions, rebuild: ['scene', 'world'], panelDeps: ['flavours', 'day'],
     formatters: { dayName: v => dayAt(v / 1000).name },
     onState: (k, v) => hooks.onState(k, v), onRebuild: c => hooks.onRebuild(c), onConfig: (p, c) => hooks.onConfig(p, c),
   });
-  applySceneConfig(CFG().scene);
+  setWorld(CFG().world); applySceneConfig(CFG().scene);
+  const VOY = () => !!CFG().voyage?.enabled;
   if (!navigator.gpu) return fail();
   let adapter = null;
   try { adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' }); } catch (e) { }
@@ -50,8 +51,9 @@ async function main() {
   const HDR = 'rgba16float', DEPTH = 'depth32float', SHADOW = 2048;
 
   // ── world (rebuildable from config.scene) ──
-  const grid = buildGridMesh(GN);
-  const water = new Water(), ship = new Ship(), parts = new Particles();
+  let grid = buildGridMesh(TN);
+  let terrain = new Terrain(), water = new Water(terrain);
+  const ship = new Ship(), parts = new Particles();
   const bodies = [];
   for (let i = 0; i < NODE.NBALL; i++) bodies.push(new Body('ball', NODE.BALL + i));
   for (let i = 0; i < NODE.NBARREL; i++) bodies.push(new Body('barrel', NODE.BARREL + i));
@@ -72,15 +74,16 @@ async function main() {
   // ── GPU resources ──
   const buf = (data, usage) => { const b = device.createBuffer({ size: Math.max(16, data.byteLength + 3 & ~3), usage: usage | GPUBufferUsage.COPY_DST }); device.queue.writeBuffer(b, 0, data); return b; };
   let nodeVB = buf(world.V, GPUBufferUsage.VERTEX), nodeIB = buf(world.I, GPUBufferUsage.INDEX);
-  const gridVB = buf(grid.V, GPUBufferUsage.VERTEX), gridIB = buf(grid.I, GPUBufferUsage.INDEX);
-  const UF = new Float32Array(160);
+  let gridVB = buf(grid.V, GPUBufferUsage.VERTEX), gridIB = buf(grid.I, GPUBufferUsage.INDEX);
+  const UF = new Float32Array(168);
   const uniBuf = device.createBuffer({ size: UF.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   const nodeF = new Float32Array(NODE_COUNT * 20);
   const nodeBuf = device.createBuffer({ size: nodeF.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
   const partBuf = device.createBuffer({ size: PCAP * PF * 4, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
   const postF = new Float32Array(4);
   const postBuf = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-  const hfTex = device.createTexture({ size: [GN, GN], format: 'rgba32float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+  const texOf = (n, f) => device.createTexture({ size: [n, n], format: f, usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+  let hfTex = texOf(GN, 'rgba32float'), terrTex = texOf(TN, 'r32float');
   const shadowTex = device.createTexture({ size: [SHADOW, SHADOW], format: DEPTH, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
   const linSamp = device.createSampler({ magFilter: 'linear', minFilter: 'linear', addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge' });
   const cmpSamp = device.createSampler({ compare: 'less', magFilter: 'linear', minFilter: 'linear' });
@@ -89,7 +92,8 @@ async function main() {
   const bgl0 = device.createBindGroupLayout({ entries: [
     { binding: 0, visibility: VF, buffer: { type: 'uniform' } },
     { binding: 1, visibility: VF, buffer: { type: 'read-only-storage' } },
-    { binding: 2, visibility: VF, texture: { sampleType: 'unfilterable-float' } }] });
+    { binding: 2, visibility: VF, texture: { sampleType: 'unfilterable-float' } },
+    { binding: 3, visibility: VF, texture: { sampleType: 'unfilterable-float' } }] });
   const bglShadow = device.createBindGroupLayout({ entries: [
     { binding: 0, visibility: FR, texture: { sampleType: 'depth' } },
     { binding: 1, visibility: FR, sampler: { type: 'comparison' } }] });
@@ -100,7 +104,9 @@ async function main() {
     { binding: 0, visibility: FR, texture: { sampleType: 'float' } },
     { binding: 1, visibility: FR, sampler: { type: 'filtering' } },
     { binding: 2, visibility: FR, buffer: { type: 'uniform' } }] });
-  const bg0 = device.createBindGroup({ layout: bgl0, entries: [{ binding: 0, resource: { buffer: uniBuf } }, { binding: 1, resource: { buffer: nodeBuf } }, { binding: 2, resource: hfTex.createView() }] });
+  const makeBg0 = () => device.createBindGroup({ layout: bgl0, entries: [{ binding: 0, resource: { buffer: uniBuf } }, { binding: 1, resource: { buffer: nodeBuf } },
+    { binding: 2, resource: hfTex.createView() }, { binding: 3, resource: terrTex.createView() }] });
+  let bg0 = makeBg0();
   const bgShadow = device.createBindGroup({ layout: bglShadow, entries: [{ binding: 0, resource: shadowTex.createView() }, { binding: 1, resource: cmpSamp }] });
   const L0 = device.createPipelineLayout({ bindGroupLayouts: [bgl0] });
   const L1 = device.createPipelineLayout({ bindGroupLayouts: [bgl0, bglShadow] });
@@ -174,6 +180,11 @@ async function main() {
     const asp = canvas.clientWidth / Math.max(1, canvas.clientHeight), c = CFG().camera;
     S.cam.az = c.azimuth; S.cam.el = c.elevation; S.cam.target = [...c.target];
     S.cam.dist = asp < 1 ? Math.min(c.distance / Math.max(asp, 0.45) * 0.9, 24) : c.distance;
+    if (VOY()) {
+      const v = CFG().voyage.camera, f = Q.rot(ship.q, [0, 0, 1]);
+      S.camOff = 0; S.camHold = 0; S.followAz = Math.atan2(-f[0], -f[2]); S.cam.el = v.elevation;
+      S.cam.dist = asp < 1 ? v.distance * 1.4 : v.distance; S.cam.target = null;
+    }
   };
   camHome();
   let blockM = M4.id(), invBlockM = M4.id(), gLocal = [0, -G_BODY, 0];
@@ -207,9 +218,9 @@ async function main() {
   function fireCannon() {
     const toCam = vsub(local(camPos), ship.pos);
     const sideW = Q.rot(ship.q, [1, 0, 0]);
-    const side = vdot(sideW, toCam) >= 0 ? 1 : -1;
+    const side = VOY() ? (ship.gunIdx % 2 ? 1 : -1) : vdot(sideW, toCam) >= 0 ? 1 : -1;
     const guns = SHIP_INFO.muzzles.filter(m => m.side === side);
-    const g = guns[ship.gunIdx++ % guns.length];
+    const g = guns[(VOY() ? ship.gunIdx++ >> 1 : ship.gunIdx++) % guns.length];
     const B = CFG().sim.bodies, mp = ship.toWorld(g.p), dir = vnorm(Q.rot(ship.q, [side, B.cannonElevation, 0.05]));
     const b = freeBody('ball'); b.spawn(mp, vadd(vscale(dir, B.cannonSpeed), ship.vel)); b.fromShip = 0.25;
     ship.applyImpulse(vscale(dir, -0.28), ship.toWorld([g.p[0], 0.25, g.p[2]]));
@@ -240,7 +251,8 @@ async function main() {
     for (let i = 0; i < 50; i++) parts.emit({ p: vadd(info.fire, [rr(-.05, .05), 0, rr(-.05, .05)]), v: [rr(-.6, .6), rr(1.2, 2.8), rr(-.6, .6)], life: rr(0.8, 1.8), s0: rr(0.008, 0.016), s1: 0.004, c0: [3, 1.6, 0.4, 1], c1: [2, 0.4, 0.05, 0.8], kind: 1, add: 1, drag: 1.2, grav: 1.2 });
   }
   function resetAll() {
-    water.reset(); ship.reset(); for (const b of bodies) b.alive = false; parts.n = 0;
+    terrain.reset(); water.reset(); ship.reset(); for (const b of bodies) b.alive = false; parts.n = 0;
+    if (VOY()) camHome();
     chest.ang = chest.vel = chest.target = 0; chest.open = false; S.shots = 0; S.tilt = [0, 0]; S.tiltV = [0, 0];
     S.shear = [0, 0]; S.shearV = [0, 0]; S.squash = S.squashV = 0;
     for (const p of palms) { p.bend = [0, 0, 0]; p.bv = [0, 0, 0]; }
@@ -390,8 +402,14 @@ async function main() {
     S.wind = [Math.sin(wa) * wm, Math.cos(wa) * wm];
     // forces into the water
     if (ptrWater) water.pressure(ptrWater[0], ptrWater[1], 0.11, 0.09);
-    if (!REDUCED && Math.random() < dt * Wv.ambientSwell) water.pressure(rr(-2.4, 2.4), rr(-0.3, 2.4), 0.2, rr(0.01, 0.025));
+    if (!REDUCED && Math.random() < dt * Wv.ambientSwell) water.pressure(water.ox + rnd() * water.N * water.dx, water.oz + rnd() * water.N * water.dx, 0.2, rr(0.01, 0.025));
+    water.time = S.time;
+    const V = CFG().voyage;
+    ship.anchored = !VOY();
+    ship.control = VOY() ? { thrust: (keys.up ? 1 : 0) - (keys.down ? 1 : 0), turn: (keys.left ? 1 : 0) - (keys.right ? 1 : 0), power: V.thrust, reverse: V.reverse, rudder: V.turn } : null;
+    ship.rock = [info.skull.p[0], info.skull.p[2], 0.62 * info.skull.s];
     ship.step(dt, water, gLocal, S.wind, info.anchorRing);
+    water.follow(ship.pos[0], ship.pos[2]);
     for (const b of bodies) stepBody(b, dt);
     collideBodies();
     const tension = lerp(Wv.tensionSoft, Wv.tensionFirm, S.firm);
@@ -449,7 +467,7 @@ async function main() {
     for (let i = 0; i < NODE.NPALM; i++) put(NODE.PALM + i, zero);
     palms.forEach((p, i) => put(NODE.PALM + i, M4.T(...p.base), [p.bend[0], p.bend[1], p.bend[2], p.phase]));
     const links = chainLinks(ship.toWorld(SHIP_INFO.anchorHawse), info.anchorRing, (x, z) => water.ground(x, z), NODE.NCHAIN);
-    links.forEach((m, i) => put(NODE.CHAIN + i, m));
+    links.forEach((m, i) => put(NODE.CHAIN + i, ship.anchored ? m : zero));
     for (const b of bodies) put(b.node, b.alive ? Q.mat(b.q, b.p) : zero);
     device.queue.writeBuffer(nodeBuf, 0, nodeF);
   }
@@ -462,7 +480,7 @@ async function main() {
     const moonDir = vnorm([-0.55, 0.75, -0.4]);
     if (D.sunEl < 1) { const k = smooth(1, -8, D.sunEl); key = vnorm(vlerp(key, moonDir, k)); key[1] = Math.max(key[1], 0.15); keyI = lerp(D.sunI, 0.12 * D.moon, k); keyC = vlerp(D.sunC, [0.55, 0.65, 1], k); }
     key = vnorm(key);
-    const c = [0, 1.2, 0.2], lv = M4.lookAt(vmad(c, key, 14), c, Math.abs(key[1]) > 0.95 ? [1, 0, 0] : [0, 1, 0]);
+    const c = VOY() ? S.cam.target : [0, 1.2, 0.2], lv = M4.lookAt(vmad(c, key, 14), c, Math.abs(key[1]) > 0.95 ? [1, 0, 0] : [0, 1, 0]);
     UF.set(M4.mul(M4.ortho(-5.2, 5.2, -5.2, 5.2, 1, 30), lv), 16);
     UF.set(blockM, 32); UF.set(invBlockM, 48); UF.set(invVP, 64);
     let o = 80; const v4 = (a, b, cc, d) => { UF[o++] = a; UF[o++] = b; UF[o++] = cc; UF[o++] = d; };
@@ -478,13 +496,15 @@ async function main() {
     v4(S.shear[0], S.shear[1], S.squash, WL + 0.3);
     v4(D.night, D.stars, LAYOUT.xmark[0], LAYOUT.xmark[1]);
     v4(W, H, S.wind[0] * 3, S.wind[1] * 3 * (REDUCED ? 0.4 : 1));
-    v4(GN, BLOCK, HALF, GDX);
+    v4(GN, GDX, water.ox, water.oz);
     v4(moonDir[0], moonDir[1], moonDir[2], D.moon);
     v4(...D.bg, 0);
     v4(...camR, 0); v4(...camU, 0);
     const lw = worldP(ship.toWorld(vadd(SHIP_INFO.glows[0].p, [0, 0, 0])));
     v4(lw[0], lw[1], lw[2], D.night * 0.5);
     v4(D.glow, 0, 0, 0);
+    v4(HALF, TN, BLOCK, TDX);
+    v4(SWELL.amp, SWELL.length, SWELL.speed, SWELL.fade);
     device.queue.writeBuffer(uniBuf, 0, UF);
   }
 
@@ -523,12 +543,46 @@ async function main() {
     const top = rayBox(ro, rd, [-HALF, 0, -HALF], [HALF, WL, HALF]);
     if (top) {
       if (top.face === 1) { const p = vmad(ro, rd, top.t); if (water.ground(p[0], p[2]) < WL) cand(top.t, 'water', { hp: p }); }
-      else cand(top.t, 'tilt', { hp: vmad(ro, rd, top.t) });
+      else if (!VOY()) cand(top.t, 'tilt', { hp: vmad(ro, rd, top.t) });
     }
     if (tTerr < best.t - 0.05) best = { t: tTerr, kind: 'orbit' };
     return best;
   }
   const planeHit = (ro, rd, p0, n) => { const d = vdot(rd, n); if (Math.abs(d) < 1e-5) return null; const t = vdot(vsub(p0, ro), n) / d; return t > 0 ? vmad(ro, rd, t) : null; };
+
+  // ── helm & follow camera ──
+  const keys = { up: false, down: false, left: false, right: false };
+  const KEYMAP = { ArrowUp: 'up', KeyW: 'up', ArrowDown: 'down', KeyS: 'down', ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right' };
+  const typing = e => e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
+  addEventListener('keydown', e => { const k = KEYMAP[e.code]; if (k && VOY() && !typing(e)) { keys[k] = true; e.preventDefault(); } });
+  addEventListener('keyup', e => { const k = KEYMAP[e.code]; if (k) keys[k] = false; });
+  addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+  const zoomRange = () => VOY() ? [1.6, 14] : [5, 24];
+  function orbit(dx, dy) {
+    if (VOY()) { S.camOff -= dx * 0.006; S.camHold = 2.5; } else S.cam.az -= dx * 0.006;
+    S.cam.el = clamp(S.cam.el + dy * 0.005, 0.1, 1.3);
+  }
+  function followCamera(dt) {
+    const f = Q.rot(ship.q, [0, 0, 1]), heading = Math.atan2(-f[0], -f[2]);
+    const lag = 1 - Math.exp(-dt * CFG().voyage.camera.lag);
+    let d = heading - S.followAz; d = Math.atan2(Math.sin(d), Math.cos(d));
+    S.followAz += d * lag;
+    S.camHold = Math.max(0, (S.camHold || 0) - dt);
+    if (!S.camHold && vlen(ship.vel) > 0.15) S.camOff *= Math.exp(-dt * 0.6);
+    S.cam.az = S.followAz + S.camOff;
+    const tgt = worldP(vadd(ship.pos, [0, 0.45, 0]));
+    S.cam.target = S.cam.target ? vlerp(S.cam.target, tgt, 1 - Math.exp(-dt * 6)) : tgt;
+  }
+  // on-screen helm for touch screens
+  if (VOY()) {
+    const pad = document.createElement('div'); pad.id = 'dpad'; pad.className = 'ui';
+    pad.innerHTML = '<button data-k="up" aria-label="前进">▲</button><button data-k="left" aria-label="左转">◀</button><button data-k="down" aria-label="后退">▼</button><button data-k="right" aria-label="右转">▶</button>';
+    document.body.appendChild(pad);
+    pad.querySelectorAll('button').forEach(b => {
+      const set = v => e => { e.preventDefault(); keys[b.dataset.k] = v; b.classList.toggle('on', v); };
+      b.addEventListener('pointerdown', set(true)); for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) b.addEventListener(ev, set(false));
+    });
+  }
 
   // ── input ──
   const pointers = new Map();
@@ -558,8 +612,8 @@ async function main() {
     if (pp) { pp.x = e.clientX; pp.y = e.clientY; }
     if (pinch && pointers.size === 2) {
       const [a, b] = [...pointers.values()], d = Math.hypot(a.x - b.x, a.y - b.y), mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
-      S.cam.dist = clamp(S.cam.dist * pinch.d / Math.max(d, 1), 5, 24);
-      S.cam.az -= (mx - pinch.mx) * 0.006; S.cam.el = clamp(S.cam.el + (my - pinch.my) * 0.005, 0.1, 1.3);
+      S.cam.dist = clamp(S.cam.dist * pinch.d / Math.max(d, 1), ...zoomRange());
+      orbit(mx - pinch.mx, my - pinch.my);
       pinch = { d, mx, my }; return;
     }
     if (!act || act.id !== e.pointerId) { if (!pointers.size && e.pointerType === 'mouse') hover(e); return; }
@@ -568,7 +622,7 @@ async function main() {
     if (Math.hypot(e.clientX - act.x0, e.clientY - act.y0) > 5) act.moved = true;
     const { ro, rd } = rayAt(e.clientX, e.clientY);
     switch (act.kind) {
-      case 'orbit': S.cam.az -= dx * 0.006; S.cam.el = clamp(S.cam.el + dy * 0.005, 0.1, 1.3); break;
+      case 'orbit': orbit(dx, dy); break;
       case 'body': {
         const n = vnorm(M4.xv(invBlockM, camF)), hp = planeHit(ro, rd, act.plane, n);
         if (hp) { hp[0] = clamp(hp[0], -HALF + 0.1, HALF - 0.1); hp[2] = clamp(hp[2], -HALF + 0.1, HALF - 0.1); hp[1] = Math.max(hp[1], water.ground(hp[0], hp[2]) + act.body.r); act.body.p = hp; }
@@ -588,7 +642,7 @@ async function main() {
         if (hp) { let d = vsub(hp, top); d[1] *= 0.3; const L = vlen(d); if (L > 0.55) d = vscale(d, 0.55 / L); p.target = d; }
         break;
       }
-      default: if (act.moved) { S.cam.az -= dx * 0.006; S.cam.el = clamp(S.cam.el + dy * 0.005, 0.1, 1.3); }
+      default: if (act.moved) orbit(dx, dy);
     }
   });
   function endAct(cancel) {
@@ -612,7 +666,7 @@ async function main() {
     if (act && act.id === e.pointerId) endAct(false);
   };
   canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', e => { pointers.delete(e.pointerId); pinch = null; endAct(true); });
-  canvas.addEventListener('wheel', e => { e.preventDefault(); S.cam.dist = clamp(S.cam.dist * Math.exp(e.deltaY * 0.0012), 5, 24); }, { passive: false });
+  canvas.addEventListener('wheel', e => { e.preventDefault(); S.cam.dist = clamp(S.cam.dist * Math.exp(e.deltaY * 0.0012), ...zoomRange()); }, { passive: false });
   let hoverT = 0;
   function hover(e) {
     const now = performance.now(); if (now - hoverT < 60) return; hoverT = now;
@@ -641,15 +695,18 @@ async function main() {
       else if (k === 'damping') S.damp = v / 100; else if (k === 'day') S.day = v / 1000;
     },
     onRebuild(c) {
-      applySceneConfig(c.scene);
+      setWorld(c.world); applySceneConfig(c.scene);
       makeWorld();
-      nodeVB.destroy(); nodeIB.destroy();
+      terrain = new Terrain(); water = new Water(terrain);
+      for (const b of [nodeVB, nodeIB, gridVB, gridIB, hfTex, terrTex]) b.destroy();
       nodeVB = buf(world.V, GPUBufferUsage.VERTEX); nodeIB = buf(world.I, GPUBufferUsage.INDEX);
-      water.loadTerrain(); ship.reset(); for (const b of bodies) b.alive = false; parts.n = 0;
+      grid = buildGridMesh(TN); gridVB = buf(grid.V, GPUBufferUsage.VERTEX); gridIB = buf(grid.I, GPUBufferUsage.INDEX);
+      hfTex = texOf(GN, 'rgba32float'); terrTex = texOf(TN, 'r32float'); bg0 = makeBg0();
+      ship.reset(); for (const b of bodies) b.alive = false; parts.n = 0; camHome();
       chest.ang = chest.vel = chest.target = 0; chest.open = false;
-      Object.assign(pj, { info, palms });
+      Object.assign(pj, { info, palms, water, terrain });
     },
-    onConfig(path) { if (path === '*' || path.startsWith('camera')) camHome(); },
+    onConfig(path) { if (path === '*' || path.startsWith('camera') || path.startsWith('voyage')) camHome(); },
   };
 
   // small console handle for tinkering
@@ -675,9 +732,10 @@ async function main() {
       if (act && act.kind === 'body') { const b = act.body; act.vel = vlerp(act.vel, vscale(vsub(b.p, act.last), 1 / dt), 0.5); act.last = [...b.p]; }
     } else { parts.step(0, S.wind, water); }
     const E = water.finishFrame(dt);
-    computeBlock(); computeCamera();
+    computeBlock(); if (VOY()) followCamera(dt); computeCamera();
     updateUniforms(D); updateNodes();
     device.queue.writeTexture({ texture: hfTex }, water.tex, { bytesPerRow: GN * 16 }, [GN, GN]);
+    if (terrain.dirty) { device.queue.writeTexture({ texture: terrTex }, terrain.h, { bytesPerRow: TN * 4 }, [TN, TN]); terrain.dirty = false; }
     const counts = parts.pack({ p: info.fire, i: D.fire * (1 + S.roar) * 1.4, amb: vadd(D.amb, vscale(D.sunC, D.sunI * 0.12)) });
     const total = counts[0] + counts[1] + counts[2];
     if (total) device.queue.writeBuffer(partBuf, 0, parts.out, 0, total * PF);
@@ -720,10 +778,11 @@ async function main() {
         if (b.sub > 0.05 && b.sub < 0.98 && b.p[1] > h - b.r * 1.5) afloat++;
         else if (b.p[1] + b.r < h - 0.02 && vlen(b.v) < 0.4) sunk++;
       }
-      const vig = clamp(Math.sqrt(E / (GN * GN)) * 6 + Math.sqrt(kin) * 0.06 + vlen(ship.vel) * 0.8 + Math.hypot(...S.shear) * 4, 0, 1);
+      const vig = clamp(Math.sqrt(E / (GN * GN)) * 6 * (VOY() ? 0.5 : 1) + Math.sqrt(kin) * 0.06 + vlen(ship.vel) * 0.8 + Math.hypot(...S.shear) * 4, 0, 1);
       vigSm = lerp(vigSm, vig, 0.35);
       Shell.meter('vigour', vigSm, vigSm < 0.12 ? '平静' : vigSm < 0.35 ? '活跃' : vigSm < 0.65 ? '起伏' : '风暴');
       Shell.count('shots', S.shots); Shell.count('afloat', afloat); Shell.count('sunk', sunk);
+      { const sp = vlen([ship.vel[0], 0, ship.vel[2]]); Shell.meter('speed', sp / 1.3, (sp * 8).toFixed(1) + ' 节'); }
       const isDark = D.night > CFG().theme.darkAt;
       if (isDark !== dark) { dark = isDark; Shell.setDark(isDark); }
     }

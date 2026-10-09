@@ -1,7 +1,25 @@
 
 // ───────────────────────── world constants ─────────────────────────
-const BLOCK = 5.2, HALF = 2.6, WL = 1.45;           // block size, water rest level (block local)
-const GN = 128, GDX = BLOCK / GN;                    // simulation grid
+const WL = 1.45;                                     // water rest level (block local)
+// world dimensions — set from config.world before anything is built
+let BLOCK = 5.2, HALF = 2.6;                          // jelly block size
+let TN = 128, TDX = BLOCK / TN;                       // global terrain grid
+let GN = 128, GDX = BLOCK / GN;                       // water simulation window
+const SWELL = { amp: 0, length: 1.6, speed: 1.2, fade: 0 };
+const ISLETS = [];                                    // extra islands for large worlds: { x, z, r, h }
+function setWorld(w) {
+  BLOCK = w.size; HALF = BLOCK / 2; TN = w.terrainRes; TDX = BLOCK / TN; GN = w.waterRes;
+  GDX = w.waterCell > 0 ? w.waterCell : BLOCK / GN;
+  if (GN * GDX > BLOCK) GDX = BLOCK / GN;
+  Object.assign(SWELL, w.swell, { fade: GN * GDX < BLOCK - 1e-6 ? w.windowFade : 0 });
+  ISLETS.length = 0; for (const it of w.islets || []) ISLETS.push({ ...it });
+}
+const swellAt = (x, z, t) => {
+  if (SWELL.amp <= 0) return 0;
+  const k = TAU / SWELL.length, s = t * SWELL.speed;
+  return SWELL.amp * (0.5 * Math.sin(k * (0.8 * x + 0.6 * z) + s) + 0.3 * Math.sin(k * 1.37 * (-0.4 * x + 0.92 * z) + 1.3 * s)
+    + 0.2 * Math.sin(k * 0.71 * (0.95 * x - 0.3 * z) + 0.8 * s));
+};
 let G_BODY = 6.5;                                     // gravity for rigid bodies (configurable)
 const LAYOUT = {
   island: [0.1, -1.55, 2.1, 1.1], hills: 1, cove: 0.13, skullScale: 1.28,
@@ -115,7 +133,8 @@ function islandR(x, z) {
   return r;
 }
 function terrainFn(x, z) {
-  let sea = 0.64 + 0.05 * fbm2(x * 0.9, z * 0.9, 3) - 0.07 * (z / HALF);
+  let sea = 0.64 + 0.05 * fbm2(x * 0.9, z * 0.9, 3) - 0.07 * clamp(z / 2.6, -1, 1);
+  if (HALF > 3) sea += 0.12 * fbm2(x * 0.18 + 9, z * 0.18 - 4, 3);         // broad swales across a big sea
   const [sx, sz] = LAYOUT.skull;
   sea = lerp(sea, WL - 0.17 + 0.03 * noise2(x * 3, z * 3), Math.exp(-((x - sx) ** 2 + (z - sz) ** 2) / 0.32)); // shoal
   const r = islandR(x, z);
@@ -127,6 +146,15 @@ function terrainFn(x, z) {
   let hills = hill(-0.55, -1.95, 0.62, 0.62) + hill(0.75, -2.05, 0.58, 0.5) + hill(-1.25, -1.62, 0.42, 0.3) + hill(1.55, -1.75, 0.4, 0.22);
   hills *= (1 + 0.35 * fbm2(x * 2.2, z * 2.2, 3)) * LAYOUT.hills;
   h += hills * smooth(0.78, 0.45, r);
+  // islets: sandy humps with a green crown
+  for (const I of ISLETS) {
+    const d = Math.hypot(x - I.x, z - I.z) / I.r + 0.12 * fbm2(x * 2 + I.x, z * 2 + I.z, 2);
+    if (d > 1.6) continue;
+    let ih = lerp(sea, WL - 0.14, smooth(1.55, 1.1, d));
+    ih = lerp(ih, WL + 0.05, smooth(1.1, 0.9, d));
+    ih += I.h * smooth(0.8, 0.15, d) * (1 + 0.3 * fbm2(x * 3, z * 3, 2));
+    h = Math.max(h, ih);
+  }
   return h;
 }
 

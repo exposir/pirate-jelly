@@ -97,6 +97,7 @@ input[type=range]::-moz-range-thumb{width:12px;height:12px;border-radius:50%;bac
 body.na #fallback{display:flex}
 body.na #panel,body.na #howto{display:none}
 @media (max-width:760px){
+  #dpad{bottom:150px;left:16px}
   #masthead{left:18px;top:16px;max-width:70%}
   h1{font-size:42px;margin:10px 0 8px}
   .lede{display:none}
@@ -156,6 +157,11 @@ body.na #panel,body.na #howto{display:none}
 #editor #json{width:100%;height:calc(100% - 50px);min-height:300px;font:500 11.5px/1.45 var(--mono);white-space:pre;tab-size:2}
 #editor .jsonbar{display:flex;gap:6px;margin:8px 0}
 #editor .msg{font:500 11px/1.4 var(--mono);color:var(--accent);min-height:1.4em;padding:4px 18px 10px}
+#dpad{left:24px;bottom:120px;display:none;grid-template-columns:repeat(3,52px);grid-template-rows:repeat(2,52px);gap:6px}
+#dpad button{width:52px;height:52px;border-radius:14px;background:var(--pill);border:1px solid var(--glass-b);font-size:16px;color:var(--ink);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);touch-action:none;user-select:none;-webkit-user-select:none}
+#dpad button.on{background:var(--ink);color:var(--bg)}
+#dpad [data-k=up]{grid-column:2;grid-row:1}#dpad [data-k=left]{grid-column:1;grid-row:2}#dpad [data-k=down]{grid-column:2;grid-row:2}#dpad [data-k=right]{grid-column:3;grid-row:2}
+@media (pointer:coarse){#dpad{display:grid}}
 @media (max-width:760px){#editor{width:100%;top:auto;height:82vh;border-radius:18px 18px 0 0;transform:translateY(102%)}#editor.open{transform:none}}
 </style>
 </head>

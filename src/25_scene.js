@@ -167,8 +167,8 @@ function applySceneConfig(sc) {
   for (const P of sc.palms.slice(0, NODE.NPALM)) PALMS.push({ x: P.x, z: P.z, h: P.height, lean: [...P.lean] });
   Object.assign(FLORA, sc.flora);
 }
-function buildPalm(b, P, idx) {
-  b.node = NODE.PALM + idx;
+function buildPalm(b, P, idx, node = NODE.PALM + idx) {
+  b.node = node;
   const lc = hexc(0xc98a3e), dc = hexc(0x8e5524);
   b.push().m(0).tube(t => palmPath(P, t), (t, u) => 0.042 * (1 - 0.42 * t) * (1 + 0.16 * Math.pow(1 - ((t * 15) % 1), 3)), 60, 9,
     { col: (u, t) => ((t * 15) % 1) < 0.28 ? dc : lc, w: (u, t) => t }).pop();
@@ -436,9 +436,10 @@ function buildSeabed(b, info) {
   info.wreck = [{ c: [wx, wy + 0.15, wz], r: 0.3 }, { c: [wx - 0.25, wy + 0.12, wz - 0.2], r: 0.22 }, { c: [wx + 0.25, wy + 0.12, wz + 0.2], r: 0.22 }];
   // kelp
   const kelpSpots = [[1.9, 0.3], [0.55, 1.95], [-1.65, 1.6], [2.05, 1.85], [-2.1, 0.4], [1.0, 0.25], [-0.9, 1.9], [2.2, -0.4]].slice(0, FLORA.kelpClumps);
-  while (kelpSpots.length < FLORA.kelpClumps) { const x = rr(-2.3, 2.3), z = rr(-0.2, 2.3); if (T0(x, z) < WL - 0.3) kelpSpots.push([x, z]); }
+  for (let g = 0; kelpSpots.length < FLORA.kelpClumps && g < 5000; g++) { const x = rr(-HALF + 0.3, HALF - 0.3), z = rr(-HALF + 0.3, HALF - 0.3); if (T0(x, z) < WL - 0.3) kelpSpots.push([x, z]); }
   for (const [kx, kz] of kelpSpots) for (let s = 0; s < 4; s++) {
     const x = kx + rr(-0.12, 0.12), z = kz + rr(-0.12, 0.12), y0 = T0(x, z), H = (WL - 0.1 - y0) * rr(0.6, 0.95), ph = rnd() * 6;
+    if (H < 0.1) continue;
     const k0 = hexc(0x5d7a22), k1 = hexc(0xb7c74a);
     b.push().m(2).surf(2, 18, (xx, t) => {
       const w = 0.028 * (0.4 + 0.6 * Math.sin(PI * Math.min(t * 1.4, 1))), q = xx * 2 - 1;
@@ -452,7 +453,7 @@ function buildSeabed(b, info) {
   }
   // bubbles trapped in the jelly
   for (let i = 0; i < FLORA.trappedBubbles; i++) {
-    const x = rr(-2.4, 2.4), z = rr(-0.3, 2.4), y0 = T0(x, z); if (y0 > WL - 0.15) continue;
+    const x = rr(-HALF + 0.2, HALF - 0.2), z = HALF > 3 ? rr(-HALF + 0.2, HALF - 0.2) : rr(-0.3, 2.4), y0 = T0(x, z); if (y0 > WL - 0.15) continue;
     const r = rr(0.006, 0.026), y = rr(y0 + 0.05, WL - 0.06);
     b.push().m(9).c([0.9, 0.97, 1]).t(x, y, z).sphere(r, r, r, 8, 6).pop();
   }
@@ -481,6 +482,27 @@ function buildPools(b) {
   b.node = 0;
 }
 
+function buildIslets(b) {
+  _seed = 9001;
+  ISLETS.forEach((I, n) => {
+    const np = Math.max(1, Math.round(I.r * 2.6));
+    for (let k = 0; k < np; k++) {
+      const a = rnd() * TAU, d = rr(0, I.r * 0.45), x = I.x + Math.cos(a) * d, z = I.z + Math.sin(a) * d;
+      const P = { x, z, h: rr(0.65, 1.0), lean: [rr(-0.3, 0.3), rr(-0.3, 0.3)] };
+      b.push().t(x, T0(x, z) - 0.02, z); buildPalm(b, P, 100 + n * 10 + k, 0); b.pop();
+    }
+    b.node = 0;
+    for (let k = 0; k < Math.round(I.r * 5); k++) {
+      const a = rnd() * TAU, d = rr(I.r * 0.75, I.r * 1.05), x = I.x + Math.cos(a) * d, z = I.z + Math.sin(a) * d, r = rr(0.05, 0.12);
+      b.push().t(x, T0(x, z) + r * 0.2, z).ry(rnd() * TAU); rock(b, r, rnd() * 50); b.pop();
+    }
+    for (let k = 0; k < Math.round(I.r * 3); k++) {
+      const a = rnd() * TAU, d = rr(0, I.r * 0.5), x = I.x + Math.cos(a) * d, z = I.z + Math.sin(a) * d, y = T0(x, z), r = rr(0.07, 0.13);
+      b.push().m(7).c(vscale(hexc([0x2f9a48, 0x48b85a, 0x1f7d3f][k % 3]), rr(0.85, 1.15))).t(x, y + r * 0.5, z).sphere(r, r * 0.85, r, 12, 8).pop();
+    }
+  });
+}
+
 function buildWorld() {
   const t0 = performance.now();
   const b = new MB(), info = {};
@@ -490,6 +512,7 @@ function buildWorld() {
   buildIslandFlora(b, info);
   buildSkull(b, info);
   buildSeabed(b, info);
+  buildIslets(b);
   buildPools(b);
   info.buildMs = performance.now() - t0;
   return { V: new Float32Array(b.V), I: new Uint32Array(b.I), info };
